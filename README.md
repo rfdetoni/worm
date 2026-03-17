@@ -56,6 +56,35 @@ Add the library to your Maven project:
 
 ### 2. Define an entity
 
+#### Option A: ActiveRecord Pattern (Recommended)
+
+```java
+@DbTable("users")
+public class User extends ActiveRecord<User, UUID> implements Persistable<User> {
+    @DbId("id")
+    private UUID id;
+
+    @DbColumn("name")
+    private String name;
+
+    @DbColumn("email")
+    private String email;
+
+    @CreatedAt
+    private Instant createdAt;
+
+    @UpdatedAt
+    private Instant updatedAt;
+
+    @DbVersion
+    private long version;
+
+    // Getters/setters...
+}
+```
+
+#### Option B: Traditional Finder Pattern
+
 ```java
 @DbTable("users")
 public class User implements Persistable<User> {
@@ -83,12 +112,50 @@ public class User implements Persistable<User> {
 
 ### 3. ORM operations
 
+#### Using ActiveRecord Pattern (extends ActiveRecord<T, ID>)
+
 ```java
+// Create and save
 User user = new User();
 user.setId(UUID.randomUUID());
 user.setName("John Doe");
 user.save(); // Uses Persistable.save()
 
+// Query all
+List<User> all = User.all();
+
+// Query by ID
+Optional<User> found = User.byId(userId);
+
+// Query with filter
+FilterBuilder filter = new FilterBuilder()
+        .eq("status", "active")
+        .order("createdAt", "DESC");
+List<User> active = User.all(filter);
+
+// Pagination
+Slice<User> page = User.all(Pageable.of(0, 20));
+Slice<User> filtered = User.all(filter, Pageable.of(0, 20));
+
+// Count
+long total = User.count();
+long activeCount = User.count(filter);
+
+// Existence check
+boolean exists = User.exists();
+boolean hasActive = User.exists(filter);
+```
+
+#### Using Traditional Finder Pattern
+
+```java
+// Create and save (same for both patterns)
+User user = new User();
+user.setId(UUID.randomUUID());
+user.setName("John Doe");
+user.save();
+
+// Query using Finder static methods
 Optional<User> found = Finder.byId(User.class, userId);
 
 FilterBuilder filter = new FilterBuilder()

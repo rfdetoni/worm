@@ -26,6 +26,25 @@ public final class FilterBuilder {
     /** Static factory — less verbose than {@code new FilterBuilder()}. */
     public static FilterBuilder where() { return new FilterBuilder(); }
 
+    public static FilterBuilder empty(){
+        return new FilterBuilder();
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Chainable static methods for fluent API without 'new' keyword
+    // Usage: FilterBuilder.create().eq("status", "ACTIVE").eq("id", 123)
+    // OR:    FilterBuilder.create().gt("age", 18).lte("age", 100)
+    // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Create a new FilterBuilder instance (alternative to {@code new FilterBuilder()}).
+     * Enables chainable static calls like:
+     * {@code FilterBuilder.create().eq("status", "ACTIVE").gt("age", 18)}
+     */
+    public static FilterBuilder create() {
+        return new FilterBuilder();
+    }
+
     public enum JoinType {
         INNER, LEFT, RIGHT, FULL, CROSS;
         @Override
