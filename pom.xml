@@ -28,9 +28,9 @@
         </developer>
     </developers>
     <scm>
-        <connection>scm:git:https://github.com/liviacare/worm.git</connection>
-        <developerConnection>scm:git:https://github.com/liviacare/worm.git</developerConnection>
-        <url>https://github.com/liviacare/worm</url>
+        <connection>scm:git:https://github.com/rfdetoni/worm.git</connection>
+        <developerConnection>scm:git:https://github.com/rfdetoni/worm.git</developerConnection>
+        <url>https://github.com/rfdetoni/worm</url>
     </scm>
     <properties>
         <java.version>25</java.version>
