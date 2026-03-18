@@ -49,9 +49,9 @@ Add the library to your Maven project:
 
 ```xml
 <dependency>
-    <groupId>br.com.liviacare</groupId>
-    <artifactId>worm</artifactId>
-    <version>1.0.0</version>
+  <groupId>br.com.liviacare</groupId>
+  <artifactId>worm</artifactId>
+  <version>1.0.2</version>
 </dependency>
 ```
 
