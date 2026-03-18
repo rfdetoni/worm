@@ -32,6 +32,19 @@
         <developerConnection>scm:git:https://github.com/rfdetoni/worm.git</developerConnection>
         <url>https://github.com/rfdetoni/worm</url>
     </scm>
+
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/rfdetoni/worm</url>
+        </repository>
+        <snapshotRepository>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/rfdetoni/worm</url>
+        </snapshotRepository>
+    </distributionManagement>
     <properties>
         <java.version>25</java.version>
         <maven.compiler.source>25</maven.compiler.source>

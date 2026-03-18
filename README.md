@@ -18,6 +18,7 @@
 - [Module Routing & Multi-Tenancy](#module-routing--multi-tenancy)
 - [Limitations & Non-Features](#limitations--non-features)
 - [Build & Testing](#build--testing)
+- [Publishing](#publishing)
 - [Contributing](#contributing)
 
 ## Key Features
@@ -536,6 +537,48 @@ Contributions are welcome! Please:
 ## License
 
 MIT License - See LICENSE file for details
+
+## Publishing
+
+WORM is published as a Maven library on **GitHub Packages**.
+
+### Installation
+
+Add the repository and dependency to your `pom.xml`:
+
+```xml
+<repositories>
+  <repository>
+    <id>github</id>
+    <name>GitHub Packages</name>
+    <url>https://maven.pkg.github.com/rfdetoni/worm</url>
+  </repository>
+</repositories>
+
+<dependency>
+  <groupId>br.com.liviacare</groupId>
+  <artifactId>worm</artifactId>
+  <version>1.0.1</version>
+</dependency>
+```
+
+### Authentication
+
+Update your `~/.m2/settings.xml` to authenticate with GitHub Packages:
+
+```xml
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <servers>
+    <server>
+      <id>github</id>
+      <username>YOUR_GITHUB_USERNAME</username>
+      <password>YOUR_PERSONAL_ACCESS_TOKEN</password>
+    </server>
+  </servers>
+</settings>
+```
+
+📖 **[See full publishing guide →](./PUBLISHING.md)**
 
 ## Support & Documentation
 
