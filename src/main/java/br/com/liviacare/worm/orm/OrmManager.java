@@ -100,19 +100,7 @@ public class OrmManager implements OrmOperations {
 
     public <T> int[] saveAll(List<T> entities) {
         if (entities == null || entities.isEmpty()) return new int[0];
-        final EntityMetadata<T> meta = getRequiredMetadata((Class<T>) entities.getFirst().getClass());
-        return withModule(meta, () -> {
-            final String sql = meta.insertSql();
-            final List<Object[]> params = entities.stream().map(e -> {
-                if (e instanceof iBaseEntity base) {
-                    base.created();
-                }
-                validateIdIsPresent(e, meta, "saveAll");
-                return EntityPersister.insertValues(e, meta).toArray();
-            }).toList();
-            return ormLogger.logAndExecute(SqlConstants.OP_INSERT_BATCH, sql, null,
-                    () -> executeBatchInChunks(sql, params));
-        });
+        return saveAllBatch(entities);
     }
 
     public <T> void update(T entity) {
@@ -147,17 +135,7 @@ public class OrmManager implements OrmOperations {
 
     public <T> int[] updateAll(List<T> entities) {
         if (entities == null || entities.isEmpty()) return new int[0];
-        final EntityMetadata<T> meta = getRequiredMetadata((Class<T>) entities.get(0).getClass());
-        return withModule(meta, () -> {
-            final String sql = meta.updateSql();
-            for (T e : entities) {
-                if (e instanceof iBaseEntity base) {
-                    base.updated();
-                }
-            }
-            return ormLogger.logAndExecute(SqlConstants.OP_UPDATE_BATCH, sql, null,
-                    () -> updateAllBatch(entities));
-        });
+        return updateAllBatch(entities);
     }
 
     public <T> void delete(T entity) {
@@ -194,27 +172,12 @@ public class OrmManager implements OrmOperations {
 
     public <T> int[] deleteAll(List<T> entities) {
         if (entities == null || entities.isEmpty()) return new int[0];
-        final EntityMetadata<T> meta = getRequiredMetadata((Class<T>) entities.get(0).getClass());
-        return withModule(meta, () -> {
-            for (T e : entities) {
-                if (meta.softDeleteSql() != null && e instanceof iBaseEntity base) {
-                    base.deleted();
-                }
-            }
-            final String sql = meta.deleteSql();
-            return ormLogger.logAndExecute(SqlConstants.OP_DELETE_BATCH, sql, null,
-                    () -> deleteAllBatch(entities));
-        });
+        return deleteAllBatch(entities);
     }
 
     public <T> int[] upsertAll(List<T> entities) {
         if (entities == null || entities.isEmpty()) return new int[0];
-        final EntityMetadata<T> meta = getRequiredMetadata((Class<T>) entities.get(0).getClass());
-        return withModule(meta, () -> {
-            final String sql = meta.upsertSql() != null ? meta.upsertSql() : meta.insertSql();
-            return ormLogger.logAndExecute(SqlConstants.OP_UPSERT_BATCH, sql, null,
-                    () -> upsertAllBatch(entities));
-        });
+        return upsertAllBatch(entities);
     }
 
     // </editor-fold>
@@ -675,7 +638,8 @@ public class OrmManager implements OrmOperations {
                 validateIdIsPresent(e, meta, "saveAll");
                 params.add(EntityPersister.insertValues(e, meta).toArray());
             }
-            return executeBatchInChunks(sql, params);
+            return ormLogger.logBatchAndExecute(SqlConstants.OP_INSERT_BATCH, sql, params,
+                    () -> executeBatchInChunks(sql, params));
         });
     }
 
@@ -702,7 +666,8 @@ public class OrmManager implements OrmOperations {
                     }
                 }
             }
-            int[] results = executeBatchInChunks(sql, params);
+            int[] results = ormLogger.logBatchAndExecute(SqlConstants.OP_UPDATE_BATCH, sql, params,
+                    () -> executeBatchInChunks(sql, params));
             if (meta.hasVersion()) {
                 for (int i = 0; i < results.length; i++) {
                     if (results[i] == 0) {
@@ -727,7 +692,8 @@ public class OrmManager implements OrmOperations {
                 }
                 params.add(new Object[]{id});
             }
-            return executeBatchInChunks(sql, params);
+            return ormLogger.logBatchAndExecute(SqlConstants.OP_DELETE_BATCH, sql, params,
+                    () -> executeBatchInChunks(sql, params));
         });
     }
 
@@ -753,7 +719,8 @@ public class OrmManager implements OrmOperations {
                 validateIdIsPresent(e, meta, "upsertAll");
                 params.add(EntityPersister.insertValues(e, meta).toArray());
             }
-            return executeBatchInChunks(sql, params);
+            return ormLogger.logBatchAndExecute(SqlConstants.OP_UPSERT_BATCH, sql, params,
+                    () -> executeBatchInChunks(sql, params));
         });
     }
 

@@ -54,4 +54,37 @@ public final class OrmLogger {
     public void logAndExecute(String operation, String sql, List<Object> params, Runnable action) {
         logAndExecute(operation, sql, params, () -> { action.run(); return null; });
     }
+
+    public <T> T logBatchAndExecute(String operation, String sql, List<Object[]> params, Supplier<T> action) {
+        boolean debugMain = log.isDebugEnabled();
+        boolean debugExt  = externalLog != null && externalLog.isDebugEnabled();
+
+        if (debugMain || debugExt) {
+            String interpolatedBatch = SqlLogger.formatBatch(sql, params);
+            if (debugMain) log.debug("[WORM(Weightless ORM)] [{}] {}", operation, interpolatedBatch);
+            if (debugExt)  externalLog.debug("[WORM(Weightless ORM)] [{}] {}", operation, interpolatedBatch);
+        }
+
+        long start = System.nanoTime();
+        try {
+            T result = action.get();
+            if (debugMain || debugExt) {
+                long elapsed = System.nanoTime() - start;
+                if (debugMain) SqlLogger.logBatch(log, operation, sql, params, elapsed);
+                if (debugExt)  SqlLogger.logBatch(externalLog, operation, sql, params, elapsed);
+            }
+            return result;
+        } catch (Throwable t) {
+            if (debugMain || debugExt) {
+                long elapsed = System.nanoTime() - start;
+                if (debugMain) SqlLogger.logBatch(log, operation + "-FAILED", sql, params, elapsed);
+                if (debugExt)  SqlLogger.logBatch(externalLog, operation + "-FAILED", sql, params, elapsed);
+            }
+            throw t;
+        }
+    }
+
+    public void logBatchAndExecute(String operation, String sql, List<Object[]> params, Runnable action) {
+        logBatchAndExecute(operation, sql, params, () -> { action.run(); return null; });
+    }
 }

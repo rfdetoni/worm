@@ -68,4 +68,24 @@ class SqlLoggerTest {
         assertEquals("WHERE a = 'x' AND b = ?",
                 SqlLogger.format("WHERE a = ? AND b = ?", List.of("x")));
     }
+
+    @Test
+    void formatBatch_withRows_includesInterpolatedStatements() {
+        String sql = "INSERT INTO users(name,age) VALUES(?,?)";
+        List<Object[]> params = List.of(
+                new Object[]{"Alice", 30},
+                new Object[]{"Bob", 40}
+        );
+
+        String out = SqlLogger.formatBatch(sql, params);
+
+        assertTrue(out.contains("Batch with 2 statements"));
+        assertTrue(out.contains("INSERT INTO users(name,age) VALUES('Alice',30)"));
+        assertTrue(out.contains("INSERT INTO users(name,age) VALUES('Bob',40)"));
+    }
+
+    @Test
+    void formatBatch_withoutRows_reportsZeroStatements() {
+        assertEquals("Batch with 0 statements", SqlLogger.formatBatch("INSERT INTO t(a) VALUES(?)", List.of()));
+    }
 }

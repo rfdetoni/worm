@@ -31,13 +31,20 @@ public final class SqlLogger {
         if (!logger.isDebugEnabled()) return;
 
         final double ms = elapsedNanos / 1_000_000.0;
-        final String formattedParams = params.stream()
-                .map(p -> format(sql, Arrays.asList(p)))
-                .collect(Collectors.joining("\n  "));
         logger.debug(SqlConstants.LOG_FORMAT,
                 operation,
                 String.format("%.3f", ms),
-                String.format("Batch with %d statements:\n  %s", params.size(), formattedParams));
+                formatBatch(sql, params));
+    }
+
+    public static String formatBatch(String sql, List<Object[]> params) {
+        if (params == null || params.isEmpty()) {
+            return "Batch with 0 statements";
+        }
+        final String formattedParams = params.stream()
+                .map(p -> format(sql, Arrays.asList(p)))
+                .collect(Collectors.joining("\n  "));
+        return String.format("Batch with %d statements:\n  %s", params.size(), formattedParams);
     }
 
     public static String format(String sql, List<Object> params) {
