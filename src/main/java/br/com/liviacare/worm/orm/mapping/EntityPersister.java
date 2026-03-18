@@ -53,6 +53,13 @@ public final class EntityPersister {
             final MethodHandle getter = metadata.selectGetters()[idx];
             try {
                 Object val = getter.invoke(entity);
+                if (metadata.hasActive() && metadata.activeColumn().equals(column)) {
+                    // Primitive booleans default to false when unset; honor @Active(defaultValue)
+                    // so users can control the insert-time default (true or false) explicitly.
+                    if (val == null || metadata.selectTypes()[idx] == boolean.class) {
+                        val = metadata.activeDefaultValue();
+                    }
+                }
                 values.add(prepareValue(val, column, metadata, idx));
             } catch (Throwable e) {
                 throw new IllegalStateException("Failed to read column '" + column + "' from entity", e);

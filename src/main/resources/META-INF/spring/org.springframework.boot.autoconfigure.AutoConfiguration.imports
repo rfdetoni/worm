@@ -1,2 +1,4 @@
+br.com.liviacare.worm.config.OrmAutoConfiguration
+br.com.liviacare.worm.config.TransactionConfig
 br.com.liviacare.worm.config.query.QueryRepositoriesAutoConfiguration
 

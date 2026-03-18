@@ -7,11 +7,9 @@ import br.com.liviacare.worm.orm.registry.JoinInfo;
 import br.com.liviacare.worm.orm.registry.ProjectionMetadata;
 import br.com.liviacare.worm.query.FilterBuilder;
 import br.com.liviacare.worm.query.Pageable;
+import br.com.liviacare.worm.util.AliasUtils;
 
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.regex.Pattern;
 
 /**
@@ -204,13 +202,23 @@ public final class QueryBuilder<T> {
 
     private AliasContext buildAliasContext() {
         String explicitAlias = blankToNull(filter.getMainTableAlias());
-        boolean hasFilterJoins = filter.getJoins() != null && !filter.getJoins().isEmpty();
+        boolean hasFilterJoins = !filter.getJoins().isEmpty();
         // Also require an alias when the entity itself has @DbJoin metadata joins,
         // so that buildFromJoinsAndWhere (count/exists) correctly aliases the main
         // table for the ON clauses (e.g. "contact.patient_id = a.id").
         boolean hasMetaJoins = hasAnyValidMetadataJoin();
-        boolean needsAlias   = explicitAlias != null || hasFilterJoins || hasMetaJoins;
-        String resolved      = (explicitAlias != null) ? explicitAlias : "a";
+        // Fallback detection from prebuilt SQL keeps behavior correct even if join metadata
+        // shape changes in future refactors.
+        boolean sqlHasJoin = metadata.selectSql() != null && metadata.selectSql().toUpperCase().contains(" JOIN ");
+        boolean needsAlias   = explicitAlias != null || hasFilterJoins || hasMetaJoins || sqlHasJoin;
+        String resolved = (explicitAlias != null) ? explicitAlias : AliasUtils.defaultMainAlias(metadata.entityClass());
+        if (needsAlias) {
+            Set<String> used = new HashSet<>();
+            filter.getJoins().forEach(j -> {
+                if (j.alias() != null && !j.alias().isBlank()) used.add(j.alias().toLowerCase());
+            });
+            resolved = AliasUtils.ensureUniqueAlias(resolved, used);
+        }
         return AliasContext.of(needsAlias, resolved);
     }
 
@@ -468,16 +476,42 @@ public final class QueryBuilder<T> {
         String clause = filter.getWhereClause();
         if (clause == null || clause.isBlank()) return;
 
+        clause = normalizePropertyTokensToColumns(clause);
+
+        String aliasToUse = ctx.hasAlias() ? ctx.alias() : null;
+        if (aliasToUse == null) {
+            String fallbackAlias = AliasUtils.defaultMainAlias(metadata.entityClass());
+            String fromProbe = (" FROM " + metadata.tableName() + " " + fallbackAlias).toUpperCase();
+            if (sql.toString().toUpperCase().contains(fromProbe)) {
+                aliasToUse = fallbackAlias;
+            }
+        }
+
         // First, replace tableName. with alias. in the clause
-        if (ctx.hasAlias()) {
-            clause = requalifyMainTable(clause, metadata.tableName(), ctx.alias());
+        if (aliasToUse != null) {
+            clause = requalifyMainTable(clause, metadata.tableName(), aliasToUse);
         }
 
         // Then, qualify any bare columns that aren't already qualified
-        if (ctx.hasAlias()) {
-            clause = qualifyBareColumns(clause, ctx.alias());
+        if (aliasToUse != null) {
+            clause = qualifyBareColumns(clause, aliasToUse);
+            // Safety net: always qualify the entity ID column under alias mode.
+            // This keeps by-id filters deterministic even if selectColumns metadata changes.
+            String idRegex = "(?<![.\\w])" + Pattern.quote(metadata.idColumnName()) + "(?![.\\w])";
+            clause = clause.replaceAll(idRegex, aliasToUse + "." + metadata.idColumnName());
         }
         sql.append(hasWhere ? AND : WHERE).append(clause);
+    }
+
+    private String normalizePropertyTokensToColumns(String clause) {
+        String normalized = clause;
+        for (String col : metadata.selectColumns()) {
+            String camel = toCamelCase(col);
+            if (camel.equals(col)) continue;
+            String regex = "(?<![.\\w])" + Pattern.quote(camel) + "(?![.\\w])";
+            normalized = normalized.replaceAll(regex, col);
+        }
+        return normalized;
     }
 
     /**
@@ -853,6 +887,18 @@ public final class QueryBuilder<T> {
             }
         }
         return sb.toString();
+    }
+
+    private static String toCamelCase(String s) {
+        if (s == null || s.isEmpty()) return s;
+        String[] parts = s.split("_");
+        if (parts.length == 0) return s;
+        StringBuilder out = new StringBuilder(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            if (parts[i].isBlank()) continue;
+            out.append(Character.toUpperCase(parts[i].charAt(0))).append(parts[i].substring(1));
+        }
+        return out.toString();
     }
 
     private static boolean isBlank(String s) {

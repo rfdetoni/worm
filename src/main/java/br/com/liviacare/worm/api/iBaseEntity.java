@@ -1,7 +1,5 @@
 package br.com.liviacare.worm.api;
 
-import java.time.Instant;
-
 /**
  * Base interface for entities that track audit information.
  * Implement this interface in your entity class to enable automatic
@@ -13,17 +11,17 @@ import java.time.Instant;
  *     private Instant createdAt;
  *     private Instant deletedAt;
  *
- *     @Override
+ *     {@literal @}Override
  *     public void created() {
  *         this.createdAt = Instant.now();
  *     }
  *
- *     @Override
+ *     {@literal @}Override
  *     public void deleted() {
  *         this.deletedAt = Instant.now();
  *     }
  *
- *     @Override
+ *     {@literal @}Override
  *     public void updated() {
  *         // optional: update an updatedAt field
  *     }

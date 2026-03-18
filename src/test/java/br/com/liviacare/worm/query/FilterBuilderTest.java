@@ -142,12 +142,15 @@ class FilterBuilderTest {
     }
 
     @Test
-    void conflictingAlias_throws() {
-        assertThrows(IllegalArgumentException.class, () ->
-            FilterBuilder.where()
+    void conflictingAlias_autoSuffixes() {
+        FilterBuilder f = FilterBuilder.where()
                 .leftJoin("orders", "o", "o.user_id = u.id")
-                .leftJoin("items",  "o", "o.order_id = x.id")
-        );
+                .leftJoin("items",  "o", "o.order_id = x.id");
+
+        assertEquals(2, f.getJoins().size());
+        assertEquals("o", f.getJoins().get(0).alias());
+        assertEquals("o2", f.getJoins().get(1).alias());
+        assertEquals("o2.order_id = x.id", f.getJoins().get(1).on());
     }
 
     @Test

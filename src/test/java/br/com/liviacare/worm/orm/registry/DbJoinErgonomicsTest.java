@@ -1,16 +1,14 @@
 package br.com.liviacare.worm.orm.registry;
 
-import br.com.liviacare.worm.annotation.mapping.DbId;
 import br.com.liviacare.worm.annotation.mapping.DbColumn;
+import br.com.liviacare.worm.annotation.mapping.DbId;
 import br.com.liviacare.worm.annotation.mapping.DbJoin;
 import br.com.liviacare.worm.annotation.mapping.DbTable;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
 class DbJoinErgonomicsTest {
 
@@ -101,6 +99,24 @@ class DbJoinErgonomicsTest {
         private Department department;
     }
 
+    @DbTable("users")
+    static class UserWithVoidJoin {
+        @DbId("id")
+        private Long id;
+
+        @DbJoin
+        private Void department;
+    }
+
+    @DbTable("users")
+    static class UserWithVoidCollectionJoin {
+        @DbId("id")
+        private Long id;
+
+        @DbJoin
+        private List<Void> departments;
+    }
+
     @Test
     void inferJoinTableAliasAndOnForManyToOne() {
         EntityMetadata<UserWithInferredManyToOne> metadata = EntityMetadata.of(UserWithInferredManyToOne.class);
@@ -108,8 +124,8 @@ class DbJoinErgonomicsTest {
 
         assertEquals("departments", join.getTable());
         assertEquals("department", join.getAlias());
-        assertEquals("department.id = a.department_id", join.getOn());
-        assertTrue(metadata.selectSql().contains("JOIN departments department ON department.id = a.department_id"));
+        assertEquals("department.id = userWithInferredManyToOne.department_id", join.getOn());
+        assertTrue(metadata.selectSql().contains("JOIN departments department ON department.id = userWithInferredManyToOne.department_id"));
     }
 
     @Test
@@ -119,7 +135,7 @@ class DbJoinErgonomicsTest {
 
         assertEquals("orders", join.getTable());
         assertEquals("orders", join.getAlias());
-        assertEquals("orders.owner_id = a.id", join.getOn());
+        assertEquals("orders.owner_id = userWithMappedByCollection.id", join.getOn());
     }
 
     @Test
@@ -128,7 +144,7 @@ class DbJoinErgonomicsTest {
         JoinInfo join = firstJoin(metadata);
 
         assertEquals("manager", join.getAlias());
-        assertEquals("manager.id = a.manager_id", join.getOn());
+        assertEquals("manager.id = userWithLocalColumn.manager_id", join.getOn());
     }
 
     @Test
@@ -136,7 +152,7 @@ class DbJoinErgonomicsTest {
         EntityMetadata<UserWithInferredCollectionByBackRef> metadata = EntityMetadata.of(UserWithInferredCollectionByBackRef.class);
         JoinInfo join = firstJoin(metadata);
 
-        assertEquals("orders.user_id = a.id", join.getOn());
+        assertEquals("orders.user_id = userWithInferredCollectionByBackRef.id", join.getOn());
     }
 
     @Test
@@ -144,7 +160,7 @@ class DbJoinErgonomicsTest {
         EntityMetadata<UserWithTargetColumn> metadata = EntityMetadata.of(UserWithTargetColumn.class);
         JoinInfo join = firstJoin(metadata);
 
-        assertEquals("department.code = a.dept_code", join.getOn());
+        assertEquals("department.code = userWithTargetColumn.dept_code", join.getOn());
     }
 
     @Test
@@ -153,6 +169,22 @@ class DbJoinErgonomicsTest {
                 () -> EntityMetadata.of(UserWithInvalidLocalColumn.class));
 
         assertTrue(ex.getMessage().contains("does_not_exist"));
+    }
+
+    @Test
+    void failFastWhenJoinTypeIsVoidClass() {
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> EntityMetadata.of(UserWithVoidJoin.class));
+
+        assertTrue(ex.getMessage().contains("cannot use void/Void"));
+    }
+
+    @Test
+    void failFastWhenJoinCollectionElementTypeIsVoidClass() {
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> EntityMetadata.of(UserWithVoidCollectionJoin.class));
+
+        assertTrue(ex.getMessage().contains("cannot use void/Void"));
     }
 
     private static JoinInfo firstJoin(EntityMetadata<?> metadata) {

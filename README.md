@@ -18,6 +18,7 @@
 - [Module Routing & Multi-Tenancy](#module-routing--multi-tenancy)
 - [Limitations & Non-Features](#limitations--non-features)
 - [Build & Testing](#build--testing)
+- [Publishing](#publishing)
 - [Contributing](#contributing)
 
 ## Key Features
@@ -121,29 +122,73 @@ user.setId(UUID.randomUUID());
 user.setName("John Doe");
 user.save(); // Uses Persistable.save()
 
-// Query all
-List<User> all = User.all();
+// Finder defaults available from the object (ActiveRecord implements Finder)
+Optional<User> foundFromObject = user.byId(userId);
+List<User> activeFromObject = user.all(FilterBuilder.create().eq("status", "active"));
 
-// Query by ID
-Optional<User> found = User.byId(userId);
+// Class-level gateway (no per-entity static boilerplate)
+ActiveRecord.EntityOps<User, UUID> users = ActiveRecord.ar(User.class);
+Optional<User> found = users.byId(userId);
+List<User> all = users.all();
 
 // Query with filter
-FilterBuilder filter = new FilterBuilder()
+FilterBuilder filter = FilterBuilder.create()
         .eq("status", "active")
         .order("createdAt", "DESC");
-List<User> active = User.all(filter);
+List<User> active = users.all(filter);
 
 // Pagination
-Slice<User> page = User.all(Pageable.of(0, 20));
-Slice<User> filtered = User.all(filter, Pageable.of(0, 20));
+Slice<User> page = users.all(Pageable.of(0, 20));
+Slice<User> filtered = users.all(filter, Pageable.of(0, 20));
 
 // Count
-long total = User.count();
-long activeCount = User.count(filter);
+long total = users.count();
+long activeCount = users.count(filter);
 
 // Existence check
-boolean exists = User.exists();
-boolean hasActive = User.exists(filter);
+boolean exists = users.exists();
+boolean hasActive = users.exists(filter);
+
+// Static shortcuts also exist
+List<User> all2 = ActiveRecord.all(User.class);
+Optional<User> one2 = ActiveRecord.byId(User.class, userId);
+```
+
+If you prefer the exact style `User.byId(id)` / `User.all()`, add tiny static forwarders in the entity:
+
+```java
+@DbTable("users")
+public class User extends ActiveRecord<User, UUID> {
+    // ...fields...
+
+    private static final EntityOps<User, UUID> AR = ActiveRecord.ar(User.class);
+
+    public static Optional<User> byId(UUID id) { return AR.byId(id); }
+    public static List<User> all() { return AR.all(); }
+    public static List<User> all(FilterBuilder filter) { return AR.all(filter); }
+    public static Slice<User> all(Pageable pageable) { return AR.all(pageable); }
+    public static Slice<User> all(FilterBuilder filter, Pageable pageable) { return AR.all(filter, pageable); }
+    public static long count() { return AR.count(); }
+    public static long count(FilterBuilder filter) { return AR.count(filter); }
+    public static boolean exists() { return AR.exists(); }
+    public static boolean exists(FilterBuilder filter) { return AR.exists(filter); }
+}
+```
+
+If you prefer the classic and even less verbose style `User.find.byId(id)` / `User.find.all()`, use the built-in factory once:
+
+```java
+@DbTable("users")
+public class User extends ActiveRecord<User, UUID> {
+    // ...fields...
+
+    public static final Finder<User, UUID> find = ActiveRecord.find(User.class);
+}
+
+// Usage
+Optional<User> one = User.find.byId(userId);
+List<User> all = User.find.all();
+List<User> active = User.find.all(FilterBuilder.create().eq("status", "active"));
 ```
 
 #### Using Traditional Finder Pattern
@@ -171,6 +216,22 @@ Slice<User> page = Finder.all(User.class, new FilterBuilder(), Pageable.of(0, 20
 ```bash
 ./mvnw clean package           # build the library and run generators
 ./mvnw test                    # execute the test suite
+```
+
+### 5. Explicit enable (optional)
+
+WORM is auto-configured when on the classpath. If you prefer explicit opt-in, annotate your application:
+
+```java
+import br.com.liviacare.worm.annotation.EnableWorm;
+
+@SpringBootApplication
+@EnableWorm
+public class Application {
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
+    }
+}
 ```
 
 ## Practical Examples
@@ -476,6 +537,48 @@ Contributions are welcome! Please:
 ## License
 
 MIT License - See LICENSE file for details
+
+## Publishing
+
+WORM is published as a Maven library on **GitHub Packages**.
+
+### Installation
+
+Add the repository and dependency to your `pom.xml`:
+
+```xml
+<repositories>
+  <repository>
+    <id>github</id>
+    <name>GitHub Packages</name>
+    <url>https://maven.pkg.github.com/rfdetoni/worm</url>
+  </repository>
+</repositories>
+
+<dependency>
+  <groupId>br.com.liviacare</groupId>
+  <artifactId>worm</artifactId>
+  <version>1.0.1</version>
+</dependency>
+```
+
+### Authentication
+
+Update your `~/.m2/settings.xml` to authenticate with GitHub Packages:
+
+```xml
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <servers>
+    <server>
+      <id>github</id>
+      <username>YOUR_GITHUB_USERNAME</username>
+      <password>YOUR_PERSONAL_ACCESS_TOKEN</password>
+    </server>
+  </servers>
+</settings>
+```
+
+📖 **[See full publishing guide →](./PUBLISHING.md)**
 
 ## Support & Documentation
 

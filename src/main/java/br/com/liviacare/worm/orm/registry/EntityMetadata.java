@@ -55,6 +55,7 @@ public final class EntityMetadata<T> {
     // ── Soft-delete / auditing columns ──────────────────────────────────────
     private final boolean          hasActive;
     private final String           activeColumn;
+    private final boolean          activeDefaultValue;
     private final boolean          hasDeletedAt;
     private final String           deletedAtColumn;
     private final Optional<String> createdByColumn;
@@ -111,6 +112,7 @@ public final class EntityMetadata<T> {
         this.softDeleteSql      = b.softDeleteSql;
         this.hasActive          = b.hasActive;
         this.activeColumn       = b.activeColumn;
+        this.activeDefaultValue = b.activeDefaultValue;
         this.hasDeletedAt       = b.hasDeletedAt;
         this.deletedAtColumn    = b.deletedAtColumn;
         this.createdByColumn    = b.createdByColumn;
@@ -178,6 +180,7 @@ public final class EntityMetadata<T> {
     public String            softDeleteSql()       { return softDeleteSql; }
     public boolean           hasActive()           { return hasActive; }
     public String            activeColumn()        { return activeColumn; }
+    public boolean           activeDefaultValue()  { return activeDefaultValue; }
     public boolean           hasDeletedAt()        { return hasDeletedAt; }
     public String            deletedAtColumn()     { return deletedAtColumn; }
     public Optional<String>  createdByColumn()     { return createdByColumn; }
@@ -231,6 +234,7 @@ public final class EntityMetadata<T> {
         String activeColumn, deletedAtColumn, versionColumn, defaultOrderBy;
         String module; // from @DbTable(module = "...")
         boolean hasActive, hasDeletedAt, hasVersion;
+        boolean activeDefaultValue = true; // mirrors @Active(defaultValue = true)
         MethodHandle idGetter, constructor, versionGetter, versionSetter;
         Optional<String> createdByColumn, createdAtColumn, updatedAtColumn;
         String[]          paramColumnLabels;

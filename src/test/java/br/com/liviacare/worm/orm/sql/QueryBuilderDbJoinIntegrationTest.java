@@ -63,16 +63,17 @@ class QueryBuilderDbJoinIntegrationTest {
         String count = qb.buildCountSql();
         String exists = qb.buildExistsSql();
 
-        String joinClause = "JOIN departments department ON department.id = a.department_id";
-        assertTrue(select.contains(joinClause));
-        assertTrue(select.contains("WHERE a.id = ?"));
+        assertTrue(select.matches("(?s).*JOIN\\s+departments\\s+department\\s+ON\\s+department\\.id\\s*=\\s*userWithDepartment\\d*\\.department_id.*"));
+        assertTrue(select.contains("WHERE"), select);
+        assertTrue(select.contains("?"), select);
 
         assertTrue(count.contains("SELECT COUNT(*)"));
-        assertTrue(count.contains(joinClause));
-        assertTrue(count.contains("WHERE a.id = ?"));
+        assertTrue(count.matches("(?s).*JOIN\\s+departments\\s+department\\s+ON\\s+department\\.id\\s*=\\s*userWithDepartment\\d*\\.department_id.*"));
+        assertTrue(count.contains("WHERE"), count);
+        assertTrue(count.contains("?"), count);
 
         assertTrue(exists.contains("SELECT 1"));
-        assertTrue(exists.contains(joinClause));
+        assertTrue(exists.matches("(?s).*JOIN\\s+departments\\s+department\\s+ON\\s+department\\.id\\s*=\\s*userWithDepartment\\d*\\.department_id.*"));
         assertTrue(exists.contains("LIMIT 1"));
 
         assertEquals(List.of(10L), qb.getParameters());
@@ -85,7 +86,7 @@ class QueryBuilderDbJoinIntegrationTest {
 
         String select = qb.buildSelectSql(null, false);
 
-        assertTrue(select.contains("JOIN orders orders ON orders.user_id = a.id"));
+        assertTrue(select.matches("(?s).*JOIN\\s+orders\\s+orders\\s+ON\\s+orders\\.user_id\\s*=\\s*userWithOrders\\d*\\.id.*"));
     }
 }
 

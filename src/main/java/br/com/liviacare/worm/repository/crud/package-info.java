@@ -5,9 +5,9 @@
  * for standard create, read, update, delete (CRUD) operations:
  *
  * <ul>
- *   <li>{@link br.com.liviacare.worm.repository.crud.GenericRepository} - concrete repository base class</li>
- *   <li>{@link br.com.liviacare.worm.repository.crud.LjfRepository} - CRUD interface contract</li>
- *   <li>{@link br.com.liviacare.worm.repository.crud.RepositoryOperations} - minimal operations interface</li>
+ *   <li>{@link br.com.liviacare.worm.repository.GenericRepository} - concrete repository base class</li>
+ *   <li>{@link br.com.liviacare.worm.repository.LjfRepository} - CRUD interface contract</li>
+ *   <li>{@link br.com.liviacare.worm.repository.RepositoryOperations} - minimal operations interface</li>
  * </ul>
  *
  * <p>Example usage:
