@@ -4,6 +4,7 @@ import br.com.liviacare.worm.annotation.audit.*;
 import br.com.liviacare.worm.annotation.mapping.*;
 import br.com.liviacare.worm.orm.mapping.ColumnConverter;
 import br.com.liviacare.worm.orm.sql.SqlConstants;
+import br.com.liviacare.worm.util.AliasUtils;
 
 import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodHandle;
@@ -11,6 +12,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.*;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 final class MetadataBuilder<T> {
@@ -44,7 +46,8 @@ final class MetadataBuilder<T> {
     private MethodHandle idGetterHandle;
     private String       idColumnName;
 
-    private final String mainAlias = "a";
+    private final String mainAlias;
+    private final Set<String> usedAliasesLowerCase = new HashSet<>();
 
     MetadataBuilder(Class<T> entityClass,
                     br.com.liviacare.worm.orm.dialect.SqlDialect dialect,
@@ -59,6 +62,8 @@ final class MetadataBuilder<T> {
 
         DbTable dbTable = entityClass.getAnnotation(DbTable.class);
         this.tableName = dbTable != null ? dbTable.value() : null;
+        this.mainAlias = AliasUtils.defaultMainAlias(entityClass);
+        this.usedAliasesLowerCase.add(this.mainAlias.toLowerCase());
     }
 
     EntityMetadata<T> build() throws NoSuchMethodException, IllegalAccessException {
@@ -68,7 +73,7 @@ final class MetadataBuilder<T> {
         else          processFields();
 
         if (idColumnName == null) {
-            // Fallback: se não achou @DbId, tenta achar um campo chamado 'id'
+            // Fallback: if @DbId was not found, try to locate a field named 'id'
             logIdWarning();
         }
 
@@ -77,7 +82,7 @@ final class MetadataBuilder<T> {
     }
 
     private void logIdWarning() {
-        // Apenas para debug interno se necessário
+        // Internal debug placeholder — no @DbId found on entity
     }
 
     private void processRecordComponents() throws NoSuchMethodException, IllegalAccessException {
@@ -93,6 +98,7 @@ final class MetadataBuilder<T> {
 
     private void processJoinComp(RecordComponent comp, DbJoin ann) throws IllegalAccessException {
         Class<?> joinClass = extractJoinClass(comp.getGenericType());
+        validateJoinClass(joinClass, comp.getName());
         JoinInfo ji = inspectJoinClass(joinClass);
         ji.isList = isCollectionType(comp.getType());
         applyJoinAnnotation(ji, ann, comp.getName(), ji.isList);
@@ -128,7 +134,7 @@ final class MetadataBuilder<T> {
                 this.idColumnName = col;
                 this.idGetterHandle = privateLookup.unreflect(comp.getAccessor());
             } else if (this.idColumnName == null && "id".equals(comp.getName())) {
-                // Convenção: se o campo chama 'id' e não temos um @DbId ainda, assume como ID
+                // Convention: if the field is named 'id' and no @DbId has been found yet, treat it as the ID
                 this.idColumnName = col;
                 this.idGetterHandle = privateLookup.unreflect(comp.getAccessor());
             }
@@ -150,6 +156,7 @@ final class MetadataBuilder<T> {
     private void processJoinField(Field f, DbJoin ann) throws IllegalAccessException {
         f.setAccessible(true);
         Class<?> joinClass = extractJoinClass(f.getGenericType());
+        validateJoinClass(joinClass, f.getName());
         JoinInfo ji = inspectJoinClass(joinClass);
         ji.isList = isCollectionType(f.getType());
         applyJoinAnnotation(ji, ann, f.getName(), ji.isList);
@@ -175,7 +182,7 @@ final class MetadataBuilder<T> {
             this.idColumnName = col;
             this.idGetterHandle = privateLookup.unreflectGetter(f);
         } else if (this.idColumnName == null && "id".equals(f.getName())) {
-            // Convenção: se o campo chama 'id' e não temos um @DbId ainda, assume como ID
+            // Convention: if the field is named 'id' and no @DbId has been found yet, treat it as the ID
             this.idColumnName = col;
             this.idGetterHandle = privateLookup.unreflectGetter(f);
         }
@@ -376,8 +383,21 @@ final class MetadataBuilder<T> {
 
     private void applyJoinAnnotation(JoinInfo ji, DbJoin ann, String relationName, boolean isCollection) {
         ji.table = resolveJoinTable(ann, ji);
-        ji.alias = resolveJoinAlias(ann, ji.table, relationName);
+        String requestedAlias = resolveJoinAlias(ann, ji.table, relationName);
+        ji.alias = AliasUtils.ensureUniqueAlias(requestedAlias, usedAliasesLowerCase);
         ji.on = resolveJoinOn(ann, ji, ji.alias, relationName, isCollection);
+        if (!ann.on().isBlank() && !ann.alias().isBlank() && !ann.alias().equals(ji.alias)) {
+            ji.on = replaceAliasReference(ji.on, ann.alias(), ji.alias);
+        }
+        if (!ann.on().isBlank()) {
+            // Backward compatibility for old docs/samples that used hardcoded main aliases a/a1.
+            if (!"a1".equals(ji.alias)) {
+                ji.on = replaceAliasReference(ji.on, "a1", mainAlias);
+            }
+            if (!"a".equals(mainAlias) && !"a".equals(ji.alias)) {
+                ji.on = replaceAliasReference(ji.on, "a", mainAlias);
+            }
+        }
         ji.type = ann.type();
     }
 
@@ -390,9 +410,14 @@ final class MetadataBuilder<T> {
     }
 
     private static String resolveJoinAlias(DbJoin ann, String table, String relationName) {
-        if (!ann.alias().isBlank()) return ann.alias();
-        if (relationName != null && !relationName.isBlank()) return relationName;
-        return table.replace('.', '_');
+        if (!ann.alias().isBlank()) return AliasUtils.sanitizeAlias(ann.alias());
+        return AliasUtils.defaultJoinAlias(relationName, table);
+    }
+
+    private static String replaceAliasReference(String expression, String fromAlias, String toAlias) {
+        if (expression == null || expression.isBlank() || fromAlias == null || fromAlias.isBlank()) return expression;
+        if (toAlias == null || toAlias.isBlank() || fromAlias.equals(toAlias)) return expression;
+        return expression.replaceAll("\\b" + Pattern.quote(fromAlias) + "\\.", toAlias + ".");
     }
 
     private String resolveJoinOn(DbJoin ann, JoinInfo ji, String alias, String relationName, boolean isCollection) {
@@ -508,6 +533,7 @@ final class MetadataBuilder<T> {
         boolean hasDeletedAt = deletedAtF.isPresent();
         String  activeCol    = hasActive   ? resolveColumnName(activeField.get())    : null;
         String  deletedAtCol = hasDeletedAt ? resolveColumnName(deletedAtF.get()) : null;
+        boolean activeDefaultValue = hasActive && activeField.get().getAnnotation(Active.class).defaultValue();
 
         Optional<Field> versionField = findField(allFields, DbVersion.class);
 
@@ -515,7 +541,9 @@ final class MetadataBuilder<T> {
         String countSql    = SqlConstants.SELECT_COUNT_STAR_FROM + tableName;
         String insertSql   = buildInsertSql();
         Optional<String> versionCol = versionField.map(f -> resolveColumnName(f));
-        String updateSql   = buildUpdateSql(versionCol);
+        List<String> effectiveUpdatable = new ArrayList<>(updatable);
+        versionCol.ifPresent(effectiveUpdatable::remove);
+        String updateSql   = buildUpdateSql(versionCol, effectiveUpdatable);
         
         if (idColumnName == null) {
             throw new RuntimeException("Entity " + entityClass.getName() + " must have an ID column (annotate a field with @DbId or name it 'id')");
@@ -562,7 +590,7 @@ final class MetadataBuilder<T> {
         b.classSetters       = classSettersList.toArray(MethodHandle[]::new);
         b.jsonColumns        = jsonCols;
         b.insertableColumns  = insertable;
-        b.updatableColumns   = updatable;
+        b.updatableColumns   = effectiveUpdatable;
         b.constructor        = constructorHandle;
         b.selectSql          = selectSql;
         b.countSql           = countSql;
@@ -572,6 +600,7 @@ final class MetadataBuilder<T> {
         b.softDeleteSql      = softDelSql;
         b.hasActive          = hasActive;
         b.activeColumn       = activeCol;
+        b.activeDefaultValue = activeDefaultValue;
         b.hasDeletedAt       = hasDeletedAt;
         b.deletedAtColumn    = deletedAtCol;
         b.createdByColumn    = createdByCol;
@@ -609,9 +638,9 @@ final class MetadataBuilder<T> {
                 + ")";
     }
 
-    private String buildUpdateSql(Optional<String> versionCol) {
+    private String buildUpdateSql(Optional<String> versionCol, List<String> updatableCols) {
         String base = SqlConstants.UPDATE + tableName + SqlConstants.SET
-                + updatable.stream().map(c -> c + " = " + SqlConstants.PLACEHOLDER).collect(Collectors.joining(SqlConstants.COMMA_SPACE));
+                + updatableCols.stream().map(c -> c + " = " + SqlConstants.PLACEHOLDER).collect(Collectors.joining(SqlConstants.COMMA_SPACE));
         if (versionCol.isPresent()) {
             String vc = versionCol.get();
             return base + SqlConstants.COMMA_SPACE + vc + " = " + vc + " + 1"
@@ -700,5 +729,12 @@ final class MetadataBuilder<T> {
         }
         if (genericType instanceof Class<?> clazz) return clazz;
         throw new RuntimeException("Unsupported join type: " + genericType);
+    }
+
+    private void validateJoinClass(Class<?> joinClass, String relationName) {
+        if (joinClass == Void.class || joinClass == Void.TYPE) {
+            throw new RuntimeException("@DbJoin '" + relationName + "' on " + entityClass.getName()
+                    + " cannot use void/Void. Use a mapped class/record type or remove @DbJoin.");
+        }
     }
 }

@@ -3,7 +3,7 @@ package br.com.liviacare.worm.query;
 import java.util.List;
 
 /**
- * Page record compatível com the query package. Contains pageable info and totals.
+ * Page record for the query package. Contains pageable metadata and totals.
  */
 public record Page<T>(
         List<T> content,

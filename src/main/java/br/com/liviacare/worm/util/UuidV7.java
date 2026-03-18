@@ -7,7 +7,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * UUIDv7-like generator implemented in a way compatible with Hibernate's
- * UuidVersion7Strategy decompiled logic: time in MSB (ms << 16), version 7
+ * UuidVersion7Strategy decompiled logic: time in MSB (ms &lt;&lt; 16), version 7
  * placed in the MSB low bits, and a 12-bit nanos/seq value. LSB contains a
  * large sequence/random value with RFC-4122 variant bits set.
  *

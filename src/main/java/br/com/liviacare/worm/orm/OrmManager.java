@@ -1,8 +1,9 @@
 package br.com.liviacare.worm.orm;
 
-import br.com.liviacare.worm.orm.exception.OrmOperationException;
+import br.com.liviacare.worm.api.iBaseEntity;
 import br.com.liviacare.worm.config.WormProperties;
 import br.com.liviacare.worm.orm.dialect.SqlDialect;
+import br.com.liviacare.worm.orm.exception.OrmOperationException;
 import br.com.liviacare.worm.orm.mapping.EntityMapper;
 import br.com.liviacare.worm.orm.mapping.EntityPersister;
 import br.com.liviacare.worm.orm.registry.EntityMetadata;
@@ -16,7 +17,7 @@ import br.com.liviacare.worm.query.Page;
 import br.com.liviacare.worm.query.Pageable;
 import br.com.liviacare.worm.query.Slice;
 import br.com.liviacare.worm.spi.ModuleContextProvider;
-import br.com.liviacare.worm.api.iBaseEntity;
+import br.com.liviacare.worm.util.AliasUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -46,8 +47,8 @@ public class OrmManager implements OrmOperations {
 
     public OrmManager(JdbcClient jdbcClient, WormProperties properties, SqlDialect dialect) {
         this.executor = new SqlExecutor(jdbcClient);
-        // Usa o logger do pacote da entidade como logger externo
-        Logger entityLogger = LoggerFactory.getLogger("app.orm.sql"); // ou use o pacote desejado
+        // Use the entity's package logger as an external logger
+        Logger entityLogger = LoggerFactory.getLogger("app.orm.sql"); // or use the desired package
         this.ormLogger = new OrmLogger(log, entityLogger);
         this.dialect = dialect;
         this.batchSize = properties != null ? properties.getBatchSize() : 500;
@@ -223,11 +224,11 @@ public class OrmManager implements OrmOperations {
     public <T, I> Optional<T> findById(Class<T> clazz, I id) {
         final EntityMetadata<T> metadata = getRequiredMetadata(clazz);
         return withModule(metadata, () -> {
-            // Check if entity has joins - if so, use default alias "a" for consistency
+            // Check if entity has joins - if so, use default camelCase entity alias for consistency
             boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
 
             if (hasJoins) {
-                return findById(clazz, id, "a");
+                return findById(clazz, id, AliasUtils.defaultMainAlias(metadata.entityClass()));
             }
 
             final String sql = metadata.selectSql() + SqlConstants.WHERE + metadata.idColumnName() + " = ?";
@@ -562,11 +563,16 @@ public class OrmManager implements OrmOperations {
         final List<Object> params;
         final Runnable execution;
 
-        if (metadata.hasDeletedAt()) {
+        // MetadataBuilder prioritizes @Active over @DeletedAt when generating softDeleteSql.
+        // Keep the bind list in the same precedence to avoid placeholder mismatches.
+        if (metadata.hasActive()) {
+            params = List.of(id);
+            execution = () -> executor.client().sql(sql).param(id).update();
+        } else if (metadata.hasDeletedAt()) {
             final Instant now = Instant.now();
             params = List.of(now, id);
             execution = () -> executor.client().sql(sql).params(now, id).update();
-        } else { // hasActive flag
+        } else {
             params = List.of(id);
             execution = () -> executor.client().sql(sql).param(id).update();
         }

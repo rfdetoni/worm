@@ -1,8 +1,8 @@
 package br.com.liviacare.worm.query;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
+import br.com.liviacare.worm.util.AliasUtils;
+
+import java.util.*;
 import java.util.regex.Pattern;
 
 /**
@@ -22,6 +22,7 @@ public final class FilterBuilder {
     private String mainTableAliasName = null;
     private final List<Cte> ctes = new ArrayList<>();
     private final List<WindowFunction> windowFunctions = new ArrayList<>();
+    private final Set<String> usedJoinAliasesLowerCase = new HashSet<>();
 
     /** Static factory — less verbose than {@code new FilterBuilder()}. */
     public static FilterBuilder where() { return new FilterBuilder(); }
@@ -77,13 +78,32 @@ public final class FilterBuilder {
      */
     public FilterBuilder join(JoinType type, String table, String alias, String on) {
         if (table == null || table.isBlank() || on == null || on.isBlank()) return this;
-        String useAlias = alias == null || alias.isBlank() ? table.replace('.', '_') : alias;
-        Join newJoin = new Join(type == null ? JoinType.INNER : type, table, useAlias, on);
-        for (Join j : joins) {
-            if (j.alias().equals(useAlias) && !j.equals(newJoin)) {
-                throw new IllegalArgumentException("Alias '" + useAlias + "' is already used for a different join");
-            }
+        String baseAlias = (alias == null || alias.isBlank())
+                ? AliasUtils.defaultJoinAlias(null, table)
+                : AliasUtils.sanitizeAlias(alias);
+
+        Join originalJoin = new Join(type == null ? JoinType.INNER : type, table, baseAlias, on);
+        if (joins.contains(originalJoin)) {
+            this.mainTableAliasRequested = true;
+            return this;
         }
+
+        Set<String> used = new HashSet<>(usedJoinAliasesLowerCase);
+        String mainAlias = (this.mainTableAliasName != null && !this.mainTableAliasName.isBlank())
+                ? this.mainTableAliasName
+                : "a";
+        used.add(mainAlias.toLowerCase());
+
+        String useAlias = AliasUtils.ensureUniqueAlias(baseAlias, used);
+        usedJoinAliasesLowerCase.clear();
+        usedJoinAliasesLowerCase.addAll(used);
+
+        String adjustedOn = on;
+        if (!baseAlias.equals(useAlias)) {
+            adjustedOn = on.replaceAll("\\b" + Pattern.quote(baseAlias) + "\\.", useAlias + ".");
+        }
+
+        Join newJoin = new Join(type == null ? JoinType.INNER : type, table, useAlias, adjustedOn);
         if (!joins.contains(newJoin)) {
             joins.add(newJoin);
         }
@@ -579,7 +599,9 @@ public final class FilterBuilder {
         String tableWithAlias = mainTable;
         if (!mainTable.matches(".*\\s+AS\\s+.*") && !mainTable.matches(".*\\s+.*")) {
             if (this.mainTableAliasRequested) {
-                String a = (this.mainTableAliasName != null && !this.mainTableAliasName.isBlank()) ? this.mainTableAliasName : "a";
+                String a = (this.mainTableAliasName != null && !this.mainTableAliasName.isBlank())
+                        ? this.mainTableAliasName
+                        : AliasUtils.defaultMainAlias(mainTable);
                 tableWithAlias = mainTable + " " + a;
             }
         }
