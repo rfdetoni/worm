@@ -38,7 +38,7 @@ public class OrmAutoConfiguration {
     @ConditionalOnMissingBean(OrmOperations.class)
     public OrmOperations ormManager(DataSource dataSource, WormProperties properties, SqlDialect sqlDialect) {
         JdbcClient jdbcClient = JdbcClient.create(dataSource);
-        OrmManager manager = new OrmManager(jdbcClient, properties, sqlDialect);
+        OrmManager manager = new OrmManager(jdbcClient, properties, sqlDialect, dataSource);
         OrmManagerLocator.setOrmManager(manager);
         return manager;
     }

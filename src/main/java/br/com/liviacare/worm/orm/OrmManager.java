@@ -22,6 +22,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import javax.sql.DataSource;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -44,19 +46,25 @@ public class OrmManager implements OrmOperations {
     private final OrmLogger ormLogger;
     private final SqlDialect dialect;
     private final int batchSize;
+    private final boolean saveTryUpdateFirst;
 
     public OrmManager(JdbcClient jdbcClient, WormProperties properties, SqlDialect dialect) {
-        this.executor = new SqlExecutor(jdbcClient);
+        this(jdbcClient, properties, dialect, null);
+    }
+
+    public OrmManager(JdbcClient jdbcClient, WormProperties properties, SqlDialect dialect, DataSource dataSource) {
+        this.executor = new SqlExecutor(jdbcClient, dataSource);
         // Use the entity's package logger as an external logger
         Logger entityLogger = LoggerFactory.getLogger("app.orm.sql"); // or use the desired package
         this.ormLogger = new OrmLogger(log, entityLogger);
         this.dialect = dialect;
         this.batchSize = properties != null ? properties.getBatchSize() : 500;
+        this.saveTryUpdateFirst = properties == null || properties.isSaveTryUpdateFirst();
     }
 
     // Backwards-compatible ctor if someone uses it
     public OrmManager(JdbcClient jdbcClient) {
-        this(jdbcClient, null, null);
+        this(jdbcClient, null, null, null);
     }
 
     public JdbcClient client() {
@@ -82,19 +90,34 @@ public class OrmManager implements OrmOperations {
             } catch (Throwable ignored) {
             }
 
+            // Fast-path: avoid read-before-write round-trip in save() for non-versioned entities.
+            if (id != null && saveTryUpdateFirst && !metadata.hasVersion()) {
+                if (entity instanceof iBaseEntity base) {
+                    base.updated();
+                }
+                final String updateSql = metadata.updateSql();
+                final List<Object> updateParams = EntityPersister.updateValues(entity, metadata, id);
+                Integer rows = ormLogger.logAndExecute(SqlConstants.OP_UPDATE, updateSql, updateParams,
+                        () -> executor.client().sql(updateSql).params(updateParams).update());
+                if (rows != null && rows > 0) {
+                    return;
+                }
+            }
+
             if (id != null && existsById(metadata.entityClass(), id)) {
                 update(entity);
-            } else {
-                if (entity instanceof iBaseEntity base) {
-                    base.created();
-                }
-                validateIdIsPresent(entity, metadata, "save");
-                final String sql = metadata.insertSql();
-                final List<Object> params = EntityPersister.insertValues(entity, metadata);
-
-                ormLogger.logAndExecute(SqlConstants.OP_INSERT, sql, params,
-                        () -> executor.client().sql(sql).params(params).update());
+                return;
             }
+
+            if (entity instanceof iBaseEntity base) {
+                base.created();
+            }
+            validateIdIsPresent(entity, metadata, "save");
+            final String sql = metadata.insertSql();
+            final List<Object> params = EntityPersister.insertValues(entity, metadata);
+
+            ormLogger.logAndExecute(SqlConstants.OP_INSERT, sql, params,
+                    () -> executor.client().sql(sql).params(params).update());
         });
     }
 

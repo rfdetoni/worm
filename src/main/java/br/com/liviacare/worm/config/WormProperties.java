@@ -22,6 +22,12 @@ public class WormProperties {
     /** Enable schema validation at startup. Default: false */
     private boolean enableSchemaValidation = false;
 
+    /**
+     * When true, save() attempts UPDATE first (for entities with ID) and falls back to INSERT
+     * if no rows are affected. This avoids a read-before-write existsById() round-trip.
+     */
+    private boolean saveTryUpdateFirst = true;
+
     public WormProperties() {
     }
 
@@ -41,11 +47,20 @@ public class WormProperties {
         this.enableSchemaValidation = enableSchemaValidation;
     }
 
+    public boolean isSaveTryUpdateFirst() {
+        return saveTryUpdateFirst;
+    }
+
+    public void setSaveTryUpdateFirst(boolean saveTryUpdateFirst) {
+        this.saveTryUpdateFirst = saveTryUpdateFirst;
+    }
+
     @Override
     public String toString() {
         return "WormProperties{" +
                 "batchSize=" + batchSize +
                 ", enableSchemaValidation=" + enableSchemaValidation +
+                ", saveTryUpdateFirst=" + saveTryUpdateFirst +
                 '}';
     }
 }

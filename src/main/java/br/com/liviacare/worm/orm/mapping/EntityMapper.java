@@ -38,6 +38,9 @@ public final class EntityMapper {
                 instance = metadata.constructor().invoke();
             }
 
+            // Fast-path: no joins means we can skip join-specific logic entirely
+            final boolean hasJoins = joins != null && joins.length > 0;
+
             for (int i = 0; i < params; i++) {
                 if (paramLabels[i] != null) {
                     // Simple column mapped param: get raw value and apply pre-calculated converter
@@ -53,7 +56,7 @@ public final class EntityMapper {
                             setter.invoke(instance, val);
                         }
                     }
-                } else {
+                } else if (hasJoins) {
                     // Join param: reconstruct object from its result labels
                     final JoinInfo ji = joins[i];
                     if (ji == null) {
@@ -117,6 +120,8 @@ public final class EntityMapper {
                             }
                         }
                     }
+                } else if (metadata.isRecord()) {
+                    ctorArgs[i] = null;
                 }
             }
 

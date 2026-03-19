@@ -19,6 +19,8 @@ public final class SqlExecutor {
     private static final Logger log = LoggerFactory.getLogger(SqlExecutor.class);
 
     private final JdbcClient jdbcClient;
+    private final javax.sql.DataSource dataSource;
+    private volatile javax.sql.DataSource reflectedDataSource;
 
     // Micrometer optional
     @Autowired(required = false)
@@ -26,7 +28,12 @@ public final class SqlExecutor {
     private final boolean micrometerPresent = ClassUtils.isPresent("io.micrometer.core.instrument.MeterRegistry", SqlExecutor.class.getClassLoader());
 
     public SqlExecutor(JdbcClient jdbcClient) {
+        this(jdbcClient, null);
+    }
+
+    public SqlExecutor(JdbcClient jdbcClient, javax.sql.DataSource dataSource) {
         this.jdbcClient = jdbcClient;
+        this.dataSource = dataSource;
     }
 
     public JdbcClient client() {
@@ -102,17 +109,7 @@ public final class SqlExecutor {
         if (batchParams == null || batchParams.isEmpty()) return new int[0];
         // record batch size metric
         try {
-            // Try to obtain DataSource from underlying JdbcOperations
-            javax.sql.DataSource ds = null;
-            try {
-                java.lang.reflect.Method m = jdbcClient.getClass().getMethod("getJdbcOperations");
-                Object ops = m.invoke(jdbcClient);
-                java.lang.reflect.Method gds = ops.getClass().getMethod("getDataSource");
-                Object dsObj = gds.invoke(ops);
-                if (dsObj instanceof javax.sql.DataSource) ds = (javax.sql.DataSource) dsObj;
-            } catch (Throwable ignored) {
-                // fallback to null
-            }
+            javax.sql.DataSource ds = resolveDataSource();
 
             if (ds == null) {
                 // Fallback: execute per-row via jdbcClient (less efficient)
@@ -143,7 +140,6 @@ public final class SqlExecutor {
 
             try (java.sql.Connection conn = ds.getConnection();
                  java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
-                conn.setAutoCommit(true);
                 for (Object[] params : batchParams) {
                     for (int i = 0; i < params.length; i++) {
                         ps.setObject(i + 1, params[i]);
@@ -155,5 +151,28 @@ public final class SqlExecutor {
         } catch (Throwable t) {
             throw new RuntimeException("Batch execution failed", t);
         }
+    }
+
+    private javax.sql.DataSource resolveDataSource() {
+        if (dataSource != null) {
+            return dataSource;
+        }
+        javax.sql.DataSource cached = reflectedDataSource;
+        if (cached != null) {
+            return cached;
+        }
+        try {
+            java.lang.reflect.Method m = jdbcClient.getClass().getMethod("getJdbcOperations");
+            Object ops = m.invoke(jdbcClient);
+            java.lang.reflect.Method gds = ops.getClass().getMethod("getDataSource");
+            Object dsObj = gds.invoke(ops);
+            if (dsObj instanceof javax.sql.DataSource ds) {
+                reflectedDataSource = ds;
+                return ds;
+            }
+        } catch (Throwable ignored) {
+            // fallback to null handled by caller
+        }
+        return null;
     }
 }

@@ -8,10 +8,12 @@ import org.postgresql.util.PGobject;
 import java.lang.invoke.MethodHandle;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.Optional;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Builds bind-parameter lists for INSERT and UPDATE using pre-cached MethodHandles
@@ -31,9 +33,16 @@ public final class EntityPersister {
     public static <T> List<Object> insertValues(T entity, EntityMetadata<T> metadata) {
         final List<Object> values = new ArrayList<>(metadata.insertableColumns().size());
         final Instant now = Instant.now();
+        
+        // Cache frequently accessed metadata to avoid repeated method calls
+        final String idCol = metadata.idColumnName();
+        final Optional<String> createdAtCol = metadata.createdAtColumn();
+        final Optional<String> updatedAtCol = metadata.updatedAtColumn();
+        final boolean hasActive = metadata.hasActive();
+        final String activeColumn = metadata.activeColumn();
 
         for (String column : metadata.insertableColumns()) {
-            if (column.equals(metadata.idColumnName())) {
+            if (column.equals(idCol)) {
                 try {
                     values.add(metadata.idGetter().invoke(entity));
                 } catch (Throwable e) {
@@ -41,19 +50,22 @@ public final class EntityPersister {
                 }
                 continue;
             }
-            if (metadata.createdAtColumn().isPresent() && metadata.createdAtColumn().get().equals(column)) {
+            
+            // Fast-path: check audit columns by reference equality first
+            if (createdAtCol.isPresent() && createdAtCol.get().equals(column)) {
                 values.add(mapAuditValue(now, metadata, column));
                 continue;
             }
-            if (metadata.updatedAtColumn().isPresent() && metadata.updatedAtColumn().get().equals(column)) {
+            if (updatedAtCol.isPresent() && updatedAtCol.get().equals(column)) {
                 values.add(mapAuditValue(now, metadata, column));
                 continue;
             }
+            
             final int idx = metadata.columnIndex(column);
             final MethodHandle getter = metadata.selectGetters()[idx];
             try {
                 Object val = getter.invoke(entity);
-                if (metadata.hasActive() && metadata.activeColumn().equals(column)) {
+                if (hasActive && activeColumn.equals(column)) {
                     // Primitive booleans default to false when unset; honor @Active(defaultValue)
                     // so users can control the insert-time default (true or false) explicitly.
                     if (val == null || metadata.selectTypes()[idx] == boolean.class) {
@@ -76,9 +88,13 @@ public final class EntityPersister {
     public static <T> List<Object> updateValues(T entity, EntityMetadata<T> metadata, Object id) {
         final List<Object> values = new ArrayList<>(metadata.updatableColumns().size() + 1);
         final Instant now = Instant.now();
+        
+        // Cache metadata to avoid repeated method calls
+        final Optional<String> updatedAtCol = metadata.updatedAtColumn();
+        final boolean hasUpdatedAt = updatedAtCol.isPresent();
 
         for (String column : metadata.updatableColumns()) {
-            if (metadata.updatedAtColumn().isPresent() && metadata.updatedAtColumn().get().equals(column)) {
+            if (hasUpdatedAt && updatedAtCol.get().equals(column)) {
                 values.add(mapAuditValue(now, metadata, column));
                 continue;
             }

@@ -240,6 +240,15 @@ public final class QueryBuilder<T> {
     private String normaliseMainTableAlias(String baseSql, AliasContext ctx) {
         if (!ctx.hasAlias()) return baseSql;
 
+        // Fast-path: skip if tableName doesn't appear in SQL with dot
+        String tableNameWithDot = metadata.tableName() + ".";
+        if (!baseSql.contains(tableNameWithDot)) {
+            // Still need to ensure alias exists in FROM clause
+            StringBuilder sb = new StringBuilder(baseSql);
+            injectAliasAfterTable(sb, metadata.tableName(), ctx.alias());
+            return sb.toString();
+        }
+
         // Replace "tableName." with "alias." in column references
         String regex = "\\b" + Pattern.quote(metadata.tableName()) + "\\.";
         String rewritten = baseSql.replaceAll(regex, ctx.alias() + ".");
@@ -504,10 +513,16 @@ public final class QueryBuilder<T> {
     }
 
     private String normalizePropertyTokensToColumns(String clause) {
+        // Fast-path: if clause contains no underscores, skip camelCase normalization entirely
+        if (!clause.contains("_") && clause.equals(clause.toLowerCase())) {
+            return clause;
+        }
         String normalized = clause;
         for (String col : metadata.selectColumns()) {
             String camel = toCamelCase(col);
             if (camel.equals(col)) continue;
+            // Avoid regex if camelCase form doesn't appear in clause
+            if (!normalized.contains(camel)) continue;
             String regex = "(?<![.\\w])" + Pattern.quote(camel) + "(?![.\\w])";
             normalized = normalized.replaceAll(regex, col);
         }
@@ -523,13 +538,18 @@ public final class QueryBuilder<T> {
      * respects any existing qualifiers (e.g. alias.column) and won't double-qualify.
      */
     private String qualifyBareColumns(String clause, String alias) {
+        if (alias == null || alias.isBlank()) return clause;
+        
+        String result = clause;
         for (String col : metadata.selectColumns()) {
+            // Fast-path: skip if column not in clause
+            if (!result.contains(col)) continue;
+            
             // Only replace unqualified column names (not preceded or followed by word chars or dots)
-            // This regex avoids matching "mycol" when searching for "col", and avoids double-qualifying
             String regex = "(?<![.\\w])" + Pattern.quote(col) + "(?![.\\w])";
-            clause = clause.replaceAll(regex, alias + "." + col);
+            result = result.replaceAll(regex, alias + "." + col);
         }
-        return clause;
+        return result;
     }
 
     // =========================================================================
