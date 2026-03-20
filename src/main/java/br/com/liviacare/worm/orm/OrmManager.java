@@ -67,7 +67,9 @@ public class OrmManager implements OrmOperations {
         this.executor = new SqlExecutor(jdbcClient, dataSource);
         // Use the entity's package logger as an external logger
         Logger entityLogger = LoggerFactory.getLogger("app.orm.sql"); // or use the desired package
-        this.ormLogger = new OrmLogger(log, entityLogger);
+        boolean asyncSqlLogEnabled = properties == null || properties.isAsyncSqlLogEnabled();
+        int asyncSqlLogQueueSize = properties != null ? properties.getAsyncSqlLogQueueSize() : 8192;
+        this.ormLogger = new OrmLogger(log, entityLogger, asyncSqlLogEnabled, asyncSqlLogQueueSize);
         this.dialect = dialect;
         this.batchSize = properties != null ? properties.getBatchSize() : 500;
         this.saveTryUpdateFirst = properties == null || properties.isSaveTryUpdateFirst();
@@ -838,8 +840,24 @@ public class OrmManager implements OrmOperations {
         if (!metadata.isTracked() || entities == null || entities.isEmpty()) {
             return;
         }
+        // Build all snapshots first, then acquire the lock once for the whole batch.
+        // The previous implementation called attachSnapshot() per entity, causing
+        // N synchronized-block acquisitions per page — O(n) lock overhead.
+        Map<Object, EntitySnapshot> batch = null;
         for (T entity : entities) {
-            attachSnapshot(entity, metadata);
+            if (entity == null) continue;
+            EntitySnapshot snapshot = EntitySnapshot.capture(entity, metadata);
+            if (entity instanceof br.com.liviacare.worm.ActiveRecord<?, ?> activeRecord) {
+                activeRecord.__wormSetSnapshot(snapshot);
+            } else {
+                if (batch == null) batch = new java.util.LinkedHashMap<>(entities.size());
+                batch.put(entity, snapshot);
+            }
+        }
+        if (batch != null) {
+            synchronized (trackedSnapshots) {
+                trackedSnapshots.putAll(batch);
+            }
         }
     }
 

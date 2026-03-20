@@ -1,3 +1,8 @@
 spring:
   application:
     name: worm
+
+worm:
+  async-sql-log-enabled: true
+  async-sql-log-queue-size: 8192
+

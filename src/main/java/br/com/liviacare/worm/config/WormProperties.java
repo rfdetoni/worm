@@ -13,6 +13,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *   insert-strategy: UPSERT
  *   bulk-copy-threshold: 20
  *   bulk-unnest-threshold: 10
+ *   async-sql-log-enabled: true
+ *   async-sql-log-queue-size: 8192
  * </pre>
  */
 @ConfigurationProperties(prefix = "worm")
@@ -54,6 +56,12 @@ public class WormProperties {
 
     /** Threshold mínimo para usar unnest em bulk update/delete. Default: 10 */
     private int bulkUnnestThreshold = 10;
+
+    /** Enable async SQL debug logging dispatch. Default: true */
+    private boolean asyncSqlLogEnabled = true;
+
+    /** Queue size for async SQL logging dispatcher. Default: 8192 */
+    private int asyncSqlLogQueueSize = 8192;
 
     public WormProperties() {
     }
@@ -114,6 +122,22 @@ public class WormProperties {
         this.bulkUnnestThreshold = bulkUnnestThreshold;
     }
 
+    public boolean isAsyncSqlLogEnabled() {
+        return asyncSqlLogEnabled;
+    }
+
+    public void setAsyncSqlLogEnabled(boolean asyncSqlLogEnabled) {
+        this.asyncSqlLogEnabled = asyncSqlLogEnabled;
+    }
+
+    public int getAsyncSqlLogQueueSize() {
+        return asyncSqlLogQueueSize;
+    }
+
+    public void setAsyncSqlLogQueueSize(int asyncSqlLogQueueSize) {
+        this.asyncSqlLogQueueSize = asyncSqlLogQueueSize;
+    }
+
     @Override
     public String toString() {
         return "WormProperties{" +
@@ -124,6 +148,8 @@ public class WormProperties {
                 ", insertStrategy=" + insertStrategy +
                 ", bulkCopyThreshold=" + bulkCopyThreshold +
                 ", bulkUnnestThreshold=" + bulkUnnestThreshold +
+                ", asyncSqlLogEnabled=" + asyncSqlLogEnabled +
+                ", asyncSqlLogQueueSize=" + asyncSqlLogQueueSize +
                 '}';
     }
 }

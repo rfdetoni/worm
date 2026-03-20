@@ -13,7 +13,11 @@ public final class EntitySnapshot {
     private final Map<String, Object> values;
 
     private EntitySnapshot(Map<String, Object> values) {
-        this.values = Collections.unmodifiableMap(new LinkedHashMap<>(values));
+        // Collections.unmodifiableMap wraps without copying — safe because capture()
+        // creates a fresh map and passes ownership here. This avoids the previous
+        // double-allocation (capture's LinkedHashMap + new LinkedHashMap in constructor).
+        // Map.copyOf() was not used because it rejects null column values.
+        this.values = Collections.unmodifiableMap(values);
     }
 
     public static <T> EntitySnapshot capture(T entity, EntityMetadata<T> metadata) {
