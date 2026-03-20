@@ -142,6 +142,181 @@ public final class EntityMapper {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Two-phase parallel mapping API
+    // Phase 1 (sequential, JDBC-bound): extract raw column values from ResultSet.
+    // Phase 2 (parallel-safe, CPU-only): convert raw values and construct entity.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Phase 1 of parallel mapping: reads all column values for the current ResultSet row
+     * into a plain {@code Object[]} without performing any type conversion or entity construction.
+     *
+     * <p>Must be called from the JDBC RowMapper callback while the cursor is positioned on the row.
+     * The returned array can safely be handed off to a worker thread for Phase 2.
+     *
+     * <p>Encoding:
+     * <ul>
+     *   <li>Simple column at index {@code i}: {@code raw[i] = rs.getObject(paramLabels[i])}</li>
+     *   <li>Join slot at index {@code i}: {@code raw[i] = Object[]} of per-join-column raw values</li>
+     *   <li>Null / missing join: {@code raw[i] = null}</li>
+     * </ul>
+     */
+    public static Object[] extractRaw(ResultSet rs, EntityMetadata<?> metadata) throws SQLException {
+        final int params = metadata.paramCount();
+        final String[] paramLabels = metadata.paramColumnLabels();
+        final JoinInfo[] joins = metadata.joinInfos();
+        final boolean hasJoins = joins != null && joins.length > 0;
+        final Object[] raw = new Object[params];
+        for (int i = 0; i < params; i++) {
+            if (paramLabels[i] != null) {
+                raw[i] = rs.getObject(paramLabels[i]);
+            } else if (hasJoins) {
+                final JoinInfo ji = joins[i];
+                if (ji == null) {
+                    raw[i] = null;
+                    continue;
+                }
+                final List<String> labels = ji.getResultLabels();
+                final Object[] joinRaw = new Object[labels.size()];
+                for (int k = 0; k < labels.size(); k++) {
+                    joinRaw[k] = rs.getObject(labels.get(k));
+                }
+                raw[i] = joinRaw;
+            } else {
+                raw[i] = null;
+            }
+        }
+        return raw;
+    }
+
+    /**
+     * Phase 2 of parallel mapping: constructs a typed entity from a raw value array
+     * previously produced by {@link #extractRaw}.
+     *
+     * <p>This method is pure-CPU and has no JDBC dependency, making it safe to invoke
+     * from any thread (e.g. via {@code parallelStream()} or a virtual-thread executor).
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> T mapFromRaw(Object[] raw, EntityMetadata<T> metadata) throws Throwable {
+        final int params = metadata.paramCount();
+        final Object[] ctorArgs = new Object[params];
+        final String[] paramLabels = metadata.paramColumnLabels();
+        final ColumnConverter[] paramConverters = metadata.paramConverters();
+        final MethodHandle[] paramSetters = metadata.paramSetters();
+        final JoinInfo[] joins = metadata.joinInfos();
+        final boolean hasJoins = joins != null && joins.length > 0;
+
+        Object instance = null;
+        if (!metadata.isRecord()) {
+            instance = metadata.constructor().invoke();
+        }
+
+        for (int i = 0; i < params; i++) {
+            if (paramLabels[i] != null) {
+                Object val = paramConverters[i].convert(raw[i]);
+                if (metadata.isRecord()) {
+                    ctorArgs[i] = val;
+                } else {
+                    final MethodHandle setter = paramSetters[i];
+                    if (setter != null) setter.invoke(instance, val);
+                }
+            } else if (hasJoins) {
+                final JoinInfo ji = joins[i];
+                if (ji == null) {
+                    if (metadata.isRecord()) ctorArgs[i] = null;
+                    continue;
+                }
+                final Object[] joinRaw = (Object[]) raw[i];
+                final ColumnConverter[] joinConverters = ji.getJoinConverters();
+                final int joinLen = joinRaw != null ? joinRaw.length : 0;
+                final Object[] joinValues = new Object[joinLen];
+                boolean anyNonNull = false;
+                for (int k = 0; k < joinLen; k++) {
+                    Object val = joinRaw[k];
+                    if (joinConverters != null && k < joinConverters.length && joinConverters[k] != null) {
+                        val = joinConverters[k].convert(val);
+                    }
+                    if (val != null) anyNonNull = true;
+                    joinValues[k] = val;
+                }
+                Object joinInstance = null;
+                if (anyNonNull) {
+                    if (ji.isRecord()) {
+                        joinInstance = ji.getJoinConstructor().invokeWithArguments(joinValues);
+                    } else {
+                        joinInstance = ji.getJoinConstructor().invoke();
+                        final MethodHandle[] setters = ji.getJoinSetters();
+                        for (int k = 0; k < setters.length && k < joinValues.length; k++) {
+                            if (setters[k] != null) setters[k].invoke(joinInstance, joinValues[k]);
+                        }
+                    }
+                }
+                final Object fieldValue;
+                if (ji.isList()) {
+                    List<Object> singleItemList = new ArrayList<>();
+                    if (joinInstance != null) singleItemList.add(joinInstance);
+                    fieldValue = singleItemList;
+                } else {
+                    fieldValue = joinInstance;
+                }
+                if (metadata.isRecord()) {
+                    ctorArgs[i] = fieldValue;
+                } else {
+                    java.lang.reflect.Field rawField = ji.getJoinField();
+                    if (rawField != null) {
+                        rawField.set(instance, fieldValue);
+                    } else {
+                        final MethodHandle setter = paramSetters[i];
+                        if (setter != null) setter.invoke(instance, fieldValue);
+                    }
+                }
+            } else if (metadata.isRecord()) {
+                ctorArgs[i] = null;
+            }
+        }
+
+        if (metadata.isRecord()) {
+            return (T) metadata.constructor().invokeWithArguments(ctorArgs);
+        } else {
+            return (T) instance;
+        }
+    }
+
+    /**
+     * Phase 1 for projection mapping: extracts raw column values from the current ResultSet row.
+     * Parallel-safe counterpart of {@link #mapToProjection}.
+     */
+    public static Object[] extractRawProjection(ResultSet rs, ProjectionMetadata projMeta) throws SQLException {
+        final String[] labels = projMeta.selectedLabels();
+        final Object[] raw = new Object[labels.length];
+        for (int i = 0; i < labels.length; i++) {
+            raw[i] = rs.getObject(labels[i]);
+        }
+        return raw;
+    }
+
+    /**
+     * Phase 2 for projection mapping: constructs a typed projection from raw values
+     * previously produced by {@link #extractRawProjection}. Pure-CPU, no JDBC dependency.
+     */
+    @SuppressWarnings("unchecked")
+    public static <P> P mapProjectionFromRaw(Object[] raw, ProjectionMetadata projMeta) throws Throwable {
+        final ColumnConverter[] convs = projMeta.converters();
+        final Object[] args = new Object[raw.length];
+        for (int i = 0; i < raw.length; i++) {
+            Object conv = convs[i].convert(raw[i]);
+            Class<?> expected = projMeta.componentTypes()[i];
+            if (conv != null && (expected == List.class || expected == Collection.class)
+                    && !(conv instanceof Collection)) {
+                args[i] = List.of(conv);
+            } else {
+                args[i] = conv;
+            }
+        }
+        return (P) projMeta.constructor().invokeWithArguments(args);
+    }
+
     public static <P> P mapToProjection(ResultSet rs, ProjectionMetadata projMeta) throws Throwable {
         final String[] labels = projMeta.selectedLabels();
         final Object[] args = new Object[labels.length];

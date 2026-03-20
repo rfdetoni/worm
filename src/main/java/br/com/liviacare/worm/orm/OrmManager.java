@@ -53,6 +53,8 @@ public class OrmManager implements OrmOperations {
     private final PostgresBulkWriter bulkWriter;
     private final java.util.concurrent.ConcurrentMap<String, String> partialUpdateSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<Object, EntitySnapshot> trackedSnapshots = Collections.synchronizedMap(new WeakHashMap<>());
+    private final boolean parallelMappingEnabled;
+    private final int parallelMappingThreshold;
 
     public OrmManager(JdbcClient jdbcClient, WormProperties properties, SqlDialect dialect) {
         this(jdbcClient, properties, dialect, null, null);
@@ -92,6 +94,11 @@ public class OrmManager implements OrmOperations {
         } else {
             this.txTemplate = null;
             log.warn("[WORM] TransactionTemplate NULL — single-row writes em autoCommit (performance degradada)");
+        }
+        this.parallelMappingEnabled = properties != null && properties.isParallelMappingEnabled();
+        this.parallelMappingThreshold = properties != null ? properties.getParallelMappingThreshold() : 1000;
+        if (this.parallelMappingEnabled) {
+            log.info("[WORM] Parallel mapping ATIVO — threshold={} rows (ForkJoinPool.commonPool)", this.parallelMappingThreshold);
         }
     }
 
@@ -346,6 +353,72 @@ public class OrmManager implements OrmOperations {
 
     // </editor-fold>
 
+    // <editor-fold desc="Parallel mapping helpers">
+
+    /**
+     * Executes a SQL query using a two-phase pipeline:
+     * <ol>
+     *   <li><b>Phase 1 – sequential extraction</b>: reads raw column values from the JDBC
+     *       {@link java.sql.ResultSet} into {@code Object[]} arrays (one per row).
+     *       This phase runs on the JDBC thread, respecting the cursor's sequential nature.</li>
+     *   <li><b>Phase 2 – parallel construction</b>: converts raw values and invokes entity
+     *       constructors/setters concurrently via {@code parallelStream()} when
+     *       {@code parallelMappingEnabled == true} and rows ≥ {@code parallelMappingThreshold};
+     *       otherwise falls back to a sequential stream.</li>
+     * </ol>
+     */
+    private <T> List<T> queryAndMap(String sql, List<Object> params, EntityMetadata<T> metadata) {
+        List<Object[]> rawRows = executor.client().sql(sql).params(params)
+                .query((rs, _) -> {
+                    try {
+                        return EntityMapper.extractRaw(rs, metadata);
+                    } catch (java.sql.SQLException e) {
+                        throw new RuntimeException(e);
+                    }
+                })
+                .list();
+        if (rawRows.isEmpty()) return List.of();
+        boolean useParallel = parallelMappingEnabled && rawRows.size() >= parallelMappingThreshold;
+        var stream = useParallel ? rawRows.parallelStream() : rawRows.stream();
+        return stream.map(raw -> {
+            try {
+                return EntityMapper.mapFromRaw(raw, metadata);
+            } catch (Throwable e) {
+                throw new RuntimeException("Failed to map row to " + metadata.entityClass().getName(), e);
+            }
+        }).collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * Projection variant of {@link #queryAndMap}: two-phase extract + parallel map
+     * using {@link EntityMapper#extractRawProjection} and {@link EntityMapper#mapProjectionFromRaw}.
+     */
+    @SuppressWarnings("unchecked")
+    private <P> List<P> queryAndMapProjection(String sql, List<Object> params,
+                                              br.com.liviacare.worm.orm.registry.ProjectionMetadata projMeta) {
+        List<Object[]> rawRows = executor.client().sql(sql).params(params)
+                .query((rs, _) -> {
+                    try {
+                        return EntityMapper.extractRawProjection(rs, projMeta);
+                    } catch (java.sql.SQLException e) {
+                        throw new RuntimeException(e);
+                    }
+                })
+                .list();
+        if (rawRows.isEmpty()) return List.of();
+        boolean useParallel = parallelMappingEnabled && rawRows.size() >= parallelMappingThreshold;
+        var stream = useParallel ? rawRows.parallelStream() : rawRows.stream();
+        return (List<P>) stream.map(raw -> {
+            try {
+                return EntityMapper.mapProjectionFromRaw(raw, projMeta);
+            } catch (Throwable e) {
+                throw new RuntimeException("Failed to map projection row", e);
+            }
+        }).collect(java.util.stream.Collectors.toList());
+    }
+
+    // </editor-fold>
+
     // <editor-fold desc="Read API">
 
     public <T, I> Optional<T> findById(Class<T> clazz, I id) {
@@ -453,9 +526,7 @@ public class OrmManager implements OrmOperations {
 
             List<T> results = ormLogger.logAndExecute(SqlConstants.OP_SELECT, sql, params,
                     () -> executor.timeAndRecord(SqlConstants.OP_SELECT, metadata.entityClass().getSimpleName(),
-                            () -> executor.client().sql(sql).params(params)
-                                    .query((rs, _) -> EntityMapper.mapRow(rs, metadata))
-                                    .list()));
+                            () -> queryAndMap(sql, params, metadata)));
 
             // Merge collection-join rows (one-to-many) before applying pagination trimming
             if (metadata.hasCollectionJoins()) {
@@ -1193,23 +1264,11 @@ public class OrmManager implements OrmOperations {
             final List<Object> params = qb.getParameters();
 
             return ormLogger.logAndExecute(SqlConstants.OP_SELECT, sql, params,
-                    () -> {
-                        try {
-                            @SuppressWarnings("unchecked")
-                            List<P> list = (List<P>) executor.client().sql(sql).params(params)
-                                    .query((rs, rn) -> {
-                                        try {
-                                            return EntityMapper.mapToProjection(rs, proj);
-                                        } catch (Throwable e) {
-                                            throw new RuntimeException(e);
-                                        }
-                                    }).list();
-                            // If projection has collection components, aggregate rows into single projection per parent
-                            return aggregateProjectionRows(list, proj);
-                        } catch (RuntimeException e) {
-                            throw e;
-                        }
-                    });
+                    () -> executor.timeAndRecord(SqlConstants.OP_SELECT, metadata.entityClass().getSimpleName(), () -> {
+                        List<P> list = queryAndMapProjection(sql, params, proj);
+                        // If projection has collection components, aggregate rows into single projection per parent
+                        return aggregateProjectionRows(list, proj);
+                    }));
         });
     }
 
@@ -1295,11 +1354,10 @@ public class OrmManager implements OrmOperations {
             final QueryBuilder<T> qb = new QueryBuilder<>(metadata, filterWithCte, dialect);
             final String sql = qb.buildSelectSql(null, true);
             final List<Object> params = qb.getParameters();
-            java.util.function.Supplier<List<T>> supplier = () -> executor.client().sql(sql).params(params)
-                    .query((rs, _) -> EntityMapper.mapRow(rs, metadata)).list();
 
             List<T> results = ormLogger.logAndExecute(SqlConstants.OP_SELECT, sql, params,
-                    () -> executor.timeAndRecord(SqlConstants.OP_SELECT, metadata.entityClass().getSimpleName(), supplier));
+                    () -> executor.timeAndRecord(SqlConstants.OP_SELECT, metadata.entityClass().getSimpleName(),
+                            () -> queryAndMap(sql, params, metadata)));
             attachSnapshots(results, metadata);
             return results;
         });
@@ -1313,12 +1371,9 @@ public class OrmManager implements OrmOperations {
             final String sql = qb.buildSelectSql(proj, null, true);
             final List<Object> params = qb.getParameters();
 
-            java.util.function.Supplier<List<P>> supplier = () -> (List<P>) executor.client().sql(sql).params(params)
-                    .query((rs, rn) -> { try { return EntityMapper.mapToProjection(rs, proj); } catch (Throwable e) { throw new RuntimeException(e);} }).list();
-
             return ormLogger.logAndExecute(SqlConstants.OP_SELECT, sql, params,
                     () -> executor.timeAndRecord(SqlConstants.OP_SELECT, metadata.entityClass().getSimpleName(), () -> {
-                        List<P> list = supplier.get();
+                        List<P> list = queryAndMapProjection(sql, params, proj);
                         return aggregateProjectionRows(list, proj);
                     }));
         });

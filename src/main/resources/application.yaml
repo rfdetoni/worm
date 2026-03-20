@@ -5,4 +5,9 @@ spring:
 worm:
   async-sql-log-enabled: true
   async-sql-log-queue-size: 8192
+  # Two-phase parallel response mapping (Phase1: serial RS drain → Phase2: parallel object construction)
+  # Enable for large result sets (thousands of rows with heavy type conversions).
+  # Threshold controls minimum row count before parallelStream() kicks in.
+  parallel-mapping-enabled: false
+  parallel-mapping-threshold: 1000
 

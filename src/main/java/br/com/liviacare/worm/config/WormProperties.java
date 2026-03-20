@@ -63,6 +63,31 @@ public class WormProperties {
     /** Queue size for async SQL logging dispatcher. Default: 8192 */
     private int asyncSqlLogQueueSize = 8192;
 
+    /**
+     * Enable two-phase parallel mapping for bulk queries.
+     *
+     * <p>When {@code true} and a query returns at least {@link #parallelMappingThreshold} rows,
+     * the ORM splits the work into two phases:
+     * <ol>
+     *   <li>Sequential JDBC extraction – reads raw column values while holding the ResultSet cursor.</li>
+     *   <li>Parallel entity construction – applies type converters and invokes constructors/setters
+     *       concurrently via {@code parallelStream()} (backed by {@link java.util.concurrent.ForkJoinPool#commonPool()}).</li>
+     * </ol>
+     *
+     * <p>This is most effective for large result sets (thousands of rows) with heavy type
+     * conversions (UUID, JSON, enums, LocalDateTime, etc.). For small result sets the
+     * overhead of splitting outweighs the gain; use the threshold to tune the cut-off.
+     *
+     * <p>Default: {@code false} – sequential mapping is used.
+     */
+    private boolean parallelMappingEnabled = false;
+
+    /**
+     * Minimum number of rows required to trigger parallel mapping when
+     * {@link #parallelMappingEnabled} is {@code true}. Default: {@code 1000}.
+     */
+    private int parallelMappingThreshold = 1000;
+
     public WormProperties() {
     }
 
@@ -138,6 +163,22 @@ public class WormProperties {
         this.asyncSqlLogQueueSize = asyncSqlLogQueueSize;
     }
 
+    public boolean isParallelMappingEnabled() {
+        return parallelMappingEnabled;
+    }
+
+    public void setParallelMappingEnabled(boolean parallelMappingEnabled) {
+        this.parallelMappingEnabled = parallelMappingEnabled;
+    }
+
+    public int getParallelMappingThreshold() {
+        return parallelMappingThreshold;
+    }
+
+    public void setParallelMappingThreshold(int parallelMappingThreshold) {
+        this.parallelMappingThreshold = parallelMappingThreshold;
+    }
+
     @Override
     public String toString() {
         return "WormProperties{" +
@@ -150,6 +191,8 @@ public class WormProperties {
                 ", bulkUnnestThreshold=" + bulkUnnestThreshold +
                 ", asyncSqlLogEnabled=" + asyncSqlLogEnabled +
                 ", asyncSqlLogQueueSize=" + asyncSqlLogQueueSize +
+                ", parallelMappingEnabled=" + parallelMappingEnabled +
+                ", parallelMappingThreshold=" + parallelMappingThreshold +
                 '}';
     }
 }
