@@ -25,6 +25,8 @@ public interface OrmOperations {
 
     <T> void update(T entity);
 
+    <T> void updatePartial(T entity, List<String> dirtyColumns);
+
     <T> int[] updateAll(List<T> entities);
 
     <T> int[] updateAllBatch(List<T> entities);

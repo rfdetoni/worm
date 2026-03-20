@@ -5,6 +5,7 @@ import br.com.liviacare.worm.api.Finder;
 import br.com.liviacare.worm.api.Persistable;
 import br.com.liviacare.worm.orm.OrmManagerLocator;
 import br.com.liviacare.worm.orm.OrmOperations;
+import br.com.liviacare.worm.orm.tracking.EntitySnapshot;
 import br.com.liviacare.worm.query.FilterBuilder;
 import br.com.liviacare.worm.query.Pageable;
 import br.com.liviacare.worm.query.Slice;
@@ -29,9 +30,22 @@ public abstract class ActiveRecord<T extends ActiveRecord<T, ID>, ID>
 		implements Persistable<T>, Deletable<T, ID>, Finder<T, ID> {
 
 	private static final ConcurrentMap<Class<?>, Class<?>> ENTITY_CLASS_CACHE = new ConcurrentHashMap<>();
+	private transient EntitySnapshot wormSnapshot;
 
 	protected static OrmOperations orm() {
 		return OrmManagerLocator.getOrmManager();
+	}
+
+	public final EntitySnapshot __wormSnapshot() {
+		return wormSnapshot;
+	}
+
+	public final void __wormSetSnapshot(EntitySnapshot snapshot) {
+		this.wormSnapshot = snapshot;
+	}
+
+	public final void __wormClearSnapshot() {
+		this.wormSnapshot = null;
 	}
 
 			@Override

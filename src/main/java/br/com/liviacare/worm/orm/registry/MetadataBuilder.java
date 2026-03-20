@@ -537,6 +537,8 @@ final class MetadataBuilder<T> {
 
         Optional<Field> versionField = findField(allFields, DbVersion.class);
 
+        boolean tracked = entityClass.isAnnotationPresent(br.com.liviacare.worm.annotation.mapping.Track.class);
+
         String selectSql   = buildSelectSql(joinClauses);
         String countSql    = SqlConstants.SELECT_COUNT_STAR_FROM + tableName;
         String insertSql   = buildInsertSql();
@@ -612,6 +614,7 @@ final class MetadataBuilder<T> {
         b.versionSetter      = versionSetter;
         b.defaultOrderBy     = normalizedOrderBy;
         b.columnIndex        = colIndex;
+        b.tracked            = tracked;
         // module routing: read from @DbTable(module = "...")
         DbTable dbTableAnn = entityClass.getAnnotation(DbTable.class);
         b.module = (dbTableAnn != null && !dbTableAnn.module().isBlank()) ? dbTableAnn.module() : null;

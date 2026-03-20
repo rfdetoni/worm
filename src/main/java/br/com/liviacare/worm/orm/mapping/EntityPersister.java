@@ -208,6 +208,47 @@ public final class EntityPersister {
         return values;
     }
 
+    /**
+     * Returns bind values for a partial UPDATE where only selected columns are emitted
+     * in the SQL SET clause. The ID is always appended at the end for WHERE id = ?,
+     * and version is appended when optimistic locking is enabled.
+     */
+    public static <T> List<Object> updateValuesForColumns(T entity, EntityMetadata<T> metadata, Object id, List<String> columns) {
+        final List<Object> values = new ArrayList<>(columns.size() + 1 + (metadata.hasVersion() ? 1 : 0));
+        final Instant now = Instant.now();
+        final Optional<String> updatedAtCol = metadata.updatedAtColumn();
+
+        for (String column : columns) {
+            if (updatedAtCol.isPresent() && updatedAtCol.get().equals(column)) {
+                values.add(mapAuditValue(now, metadata, column));
+                continue;
+            }
+
+            final int idx = metadata.columnIndex(column);
+            if (idx < 0) {
+                throw new IllegalArgumentException("Unknown column for partial update: " + column);
+            }
+
+            final MethodHandle getter = metadata.selectGetters()[idx];
+            try {
+                Object val = getter.invoke(entity);
+                values.add(prepareValue(val, column, metadata, idx));
+            } catch (Throwable e) {
+                throw new IllegalStateException("Failed to read column '" + column + "' from entity", e);
+            }
+        }
+
+        values.add(id);
+        if (metadata.hasVersion()) {
+            try {
+                values.add(metadata.versionGetter().invoke(entity));
+            } catch (Throwable e) {
+                throw new IllegalStateException("Failed to read version value from entity", e);
+            }
+        }
+        return values;
+    }
+
     private static Object prepareValue(Object val, String column, EntityMetadata<?> metadata, int idx) {
         if (val == null) return null;
         Class<?> type = metadata.selectTypes()[idx];

@@ -4,17 +4,14 @@ import br.com.liviacare.worm.api.iBaseEntity;
 import br.com.liviacare.worm.config.WormProperties;
 import br.com.liviacare.worm.orm.dialect.SqlDialect;
 import br.com.liviacare.worm.orm.exception.OrmOperationException;
-import br.com.liviacare.worm.orm.mapping.EntityMapper;
-import br.com.liviacare.worm.orm.mapping.EntityPersister;
-import br.com.liviacare.worm.orm.mapping.EntityPersisterFastPath;
-import br.com.liviacare.worm.orm.mapping.FastPathDecisionCache;
-import br.com.liviacare.worm.orm.mapping.PostgresBulkWriter;
+import br.com.liviacare.worm.orm.mapping.*;
 import br.com.liviacare.worm.orm.registry.EntityMetadata;
 import br.com.liviacare.worm.orm.registry.EntityRegistry;
 import br.com.liviacare.worm.orm.sql.OrmLogger;
 import br.com.liviacare.worm.orm.sql.QueryBuilder;
 import br.com.liviacare.worm.orm.sql.SqlConstants;
 import br.com.liviacare.worm.orm.sql.SqlExecutor;
+import br.com.liviacare.worm.orm.tracking.EntitySnapshot;
 import br.com.liviacare.worm.query.FilterBuilder;
 import br.com.liviacare.worm.query.Page;
 import br.com.liviacare.worm.query.Pageable;
@@ -30,14 +27,10 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
-
 import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.regex.Pattern;
 
 /**
@@ -58,6 +51,8 @@ public class OrmManager implements OrmOperations {
     private final WormProperties.InsertStrategy insertStrategy;
     private final TransactionTemplate txTemplate;
     private final PostgresBulkWriter bulkWriter;
+    private final java.util.concurrent.ConcurrentMap<String, String> partialUpdateSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<Object, EntitySnapshot> trackedSnapshots = Collections.synchronizedMap(new WeakHashMap<>());
 
     public OrmManager(JdbcClient jdbcClient, WormProperties properties, SqlDialect dialect) {
         this(jdbcClient, properties, dialect, null, null);
@@ -140,6 +135,7 @@ public class OrmManager implements OrmOperations {
                         executor.client().sql(sql).params(params).update();
                     }
                 });
+                attachSnapshot(entity, metadata);
                 return;
             }
 
@@ -180,6 +176,7 @@ public class OrmManager implements OrmOperations {
                         }
                     });
                 } else {
+                    attachSnapshot(entity, metadata);
                     execWrite(() -> {
                         if (entity instanceof iBaseEntity base) {
                             base.created();
@@ -216,6 +213,7 @@ public class OrmManager implements OrmOperations {
                             }
                         }
                     });
+                    attachSnapshot(entity, metadata);
                 }
                 return;
             }
@@ -236,6 +234,7 @@ public class OrmManager implements OrmOperations {
                     executor.client().sql(sql).params(params).update();
                 }
             });
+            attachSnapshot(entity, metadata);
         });
     }
 
@@ -247,17 +246,38 @@ public class OrmManager implements OrmOperations {
     public <T> void update(T entity) {
         final EntityMetadata<T> metadata = getRequiredMetadata((Class<T>) entity.getClass());
         withModuleVoid(metadata, () -> {
-            final Object id = validateIdIsPresent(entity, metadata, "update");
+            if (metadata.isTracked()) {
+                EntitySnapshot snapshot = getSnapshot(entity);
+                if (snapshot != null) {
+                    List<String> dirtyColumns = normalizeDirtyColumns(snapshot.dirtyUpdatableColumns(entity, metadata), metadata);
+                    if (dirtyColumns.isEmpty()) {
+                        return;
+                    }
+                    updatePartial(entity, dirtyColumns);
+                    return;
+                }
+            }
+
+            doFullUpdate(entity, metadata);
+        });
+    }
+
+    @Override
+    public <T> void updatePartial(T entity, List<String> dirtyColumns) {
+        final EntityMetadata<T> metadata = getRequiredMetadata((Class<T>) entity.getClass());
+        withModuleVoid(metadata, () -> {
+            final Object id = validateIdIsPresent(entity, metadata, "updatePartial");
+            final List<String> normalizedDirty = normalizeDirtyColumns(dirtyColumns, metadata);
+            if (normalizedDirty.isEmpty()) {
+                return;
+            }
 
             if (entity instanceof iBaseEntity base) {
                 base.updated();
             }
 
-            final boolean fast = FastPathDecisionCache.canUseFastPath(metadata.entityClass(), metadata);
-            final String sql = metadata.updateSql();
-            final List<Object> params = fast
-                    ? EntityPersisterFastPath.updateValuesFast(entity, metadata, id)
-                    : EntityPersister.updateValues(entity, metadata, id);
+            final String sql = buildPartialUpdateSql(metadata, normalizedDirty);
+            final List<Object> params = EntityPersister.updateValuesForColumns(entity, metadata, id, normalizedDirty);
 
             int rows = execWrite(() -> {
                 if (ormLogger.isDebugEnabled()) {
@@ -267,18 +287,8 @@ public class OrmManager implements OrmOperations {
                 return executor.client().sql(sql).params(params).update();
             });
 
-            if (metadata.hasVersion() && rows == 0) {
-                Object version = null;
-                try {
-                    version = metadata.versionGetter().invoke(entity);
-                } catch (Throwable ignored) {
-                }
-                try {
-                    executor.incrementOptimisticLockFailure(metadata.entityClass().getSimpleName());
-                } catch (Exception ignored) {
-                }
-                throw new br.com.liviacare.worm.orm.exception.OptimisticLockException(metadata.entityClass(), id, version);
-            }
+            assertOptimisticLock(metadata, entity, id, rows);
+            attachSnapshot(entity, metadata);
         });
     }
 
@@ -307,6 +317,7 @@ public class OrmManager implements OrmOperations {
                     throw new OrmOperationException("Failed to delete entity: " + entity, e);
                 }
             });
+            clearSnapshot(entity, metadata);
         });
     }
 
@@ -348,7 +359,7 @@ public class OrmManager implements OrmOperations {
             final String sql = metadata.selectSql() + SqlConstants.WHERE + metadata.idColumnName() + " = ?";
             final List<Object> params = List.of(id);
 
-            return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, params,
+            Optional<T> result = ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, params,
                     () -> executor.timeAndRecord(SqlConstants.OP_SELECT_BY_ID, metadata.entityClass().getSimpleName(),
                             () -> {
                                 if (metadata.hasCollectionJoins()) {
@@ -363,6 +374,8 @@ public class OrmManager implements OrmOperations {
                                         .optional();
                             })
             );
+            result.ifPresent(entity -> attachSnapshot(entity, metadata));
+            return result;
         });
     }
 
@@ -377,7 +390,7 @@ public class OrmManager implements OrmOperations {
             final String finalSql = sql;
             final List<Object> params = List.of(id);
 
-            return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, finalSql, params,
+            Optional<T> result = ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, finalSql, params,
                     () -> executor.timeAndRecord(SqlConstants.OP_SELECT_BY_ID, metadata.entityClass().getSimpleName(),
                             () -> {
                                 if (metadata.hasCollectionJoins()) {
@@ -392,6 +405,8 @@ public class OrmManager implements OrmOperations {
                                         .optional();
                             })
             );
+            result.ifPresent(entity -> attachSnapshot(entity, metadata));
+            return result;
         });
     }
 
@@ -403,7 +418,7 @@ public class OrmManager implements OrmOperations {
             final String sql = (dialect != null) ? dialect.applyPagination(baseSql, 1, 0) : baseSql;
             final List<Object> params = queryBuilder.getParameters();
 
-            return ormLogger.logAndExecute(SqlConstants.OP_SELECT, sql, params,
+            Optional<T> result = ormLogger.logAndExecute(SqlConstants.OP_SELECT, sql, params,
                     () -> executor.timeAndRecord(SqlConstants.OP_SELECT, metadata.entityClass().getSimpleName(),
                             () -> {
                                 if (metadata.hasCollectionJoins()) {
@@ -417,6 +432,8 @@ public class OrmManager implements OrmOperations {
                                         .query((rs, _) -> EntityMapper.mapRow(rs, metadata))
                                         .optional();
                             }));
+            result.ifPresent(entity -> attachSnapshot(entity, metadata));
+            return result;
         });
     }
 
@@ -451,6 +468,8 @@ public class OrmManager implements OrmOperations {
                     hasNext = true;
                 }
             }
+
+            attachSnapshots(results, metadata);
 
             return new Slice<>(results, pageable, hasNext);
         });
@@ -700,6 +719,143 @@ public class OrmManager implements OrmOperations {
         }
     }
 
+    private <T> void doFullUpdate(T entity, EntityMetadata<T> metadata) {
+        final Object id = validateIdIsPresent(entity, metadata, "update");
+
+        if (entity instanceof iBaseEntity base) {
+            base.updated();
+        }
+
+        final boolean fast = FastPathDecisionCache.canUseFastPath(metadata.entityClass(), metadata);
+        final String sql = metadata.updateSql();
+        final List<Object> params = fast
+                ? EntityPersisterFastPath.updateValuesFast(entity, metadata, id)
+                : EntityPersister.updateValues(entity, metadata, id);
+
+        int rows = execWrite(() -> {
+            if (ormLogger.isDebugEnabled()) {
+                return ormLogger.logAndExecute(SqlConstants.OP_UPDATE, sql, params,
+                        () -> executor.client().sql(sql).params(params).update());
+            }
+            return executor.client().sql(sql).params(params).update();
+        });
+
+        assertOptimisticLock(metadata, entity, id, rows);
+        attachSnapshot(entity, metadata);
+    }
+
+    private <T> void assertOptimisticLock(EntityMetadata<T> metadata, T entity, Object id, int rows) {
+        if (!metadata.hasVersion() || rows != 0) {
+            return;
+        }
+
+        Object version = null;
+        try {
+            version = metadata.versionGetter().invoke(entity);
+        } catch (Throwable ignored) {
+        }
+        try {
+            executor.incrementOptimisticLockFailure(metadata.entityClass().getSimpleName());
+        } catch (Exception ignored) {
+        }
+        throw new br.com.liviacare.worm.orm.exception.OptimisticLockException(metadata.entityClass(), id, version);
+    }
+
+    private <T> List<String> normalizeDirtyColumns(List<String> dirtyColumns, EntityMetadata<T> metadata) {
+        if (dirtyColumns == null || dirtyColumns.isEmpty()) {
+            return List.of();
+        }
+
+        Set<String> requested = new LinkedHashSet<>();
+        for (String column : dirtyColumns) {
+            if (column != null && metadata.updatableColumns().contains(column)) {
+                requested.add(column);
+            }
+        }
+        if (requested.isEmpty()) {
+            return List.of();
+        }
+
+        metadata.updatedAtColumn()
+                .filter(metadata.updatableColumns()::contains)
+                .ifPresent(requested::add);
+
+        List<String> normalized = new ArrayList<>(requested.size());
+        for (String column : metadata.updatableColumns()) {
+            if (requested.contains(column)) {
+                normalized.add(column);
+            }
+        }
+        return normalized;
+    }
+
+    private <T> String buildPartialUpdateSql(EntityMetadata<T> metadata, List<String> dirtyColumns) {
+        String key = metadata.tableName() + "|" + String.join(",", dirtyColumns) + "|" + metadata.hasVersion();
+        return partialUpdateSqlCache.computeIfAbsent(key, ignored -> {
+            StringJoiner set = new StringJoiner(", ");
+            for (String column : dirtyColumns) {
+                set.add(column + " = ?");
+            }
+            if (metadata.hasVersion()) {
+                String versionCol = metadata.versionColumn();
+                set.add(versionCol + " = " + versionCol + " + 1");
+                return "UPDATE " + metadata.tableName() + " SET " + set
+                        + " WHERE " + metadata.idColumnName() + " = ? AND " + versionCol + " = ?";
+            }
+            return "UPDATE " + metadata.tableName() + " SET " + set
+                    + " WHERE " + metadata.idColumnName() + " = ?";
+        });
+    }
+
+    private <T> EntitySnapshot getSnapshot(T entity) {
+        if (entity == null) {
+            return null;
+        }
+        if (entity instanceof br.com.liviacare.worm.ActiveRecord<?, ?> activeRecord) {
+            return activeRecord.__wormSnapshot();
+        }
+        synchronized (trackedSnapshots) {
+            return trackedSnapshots.get(entity);
+        }
+    }
+
+    private <T> void attachSnapshot(T entity, EntityMetadata<T> metadata) {
+        if (!metadata.isTracked() || entity == null) {
+            return;
+        }
+
+        EntitySnapshot snapshot = EntitySnapshot.capture(entity, metadata);
+        if (entity instanceof br.com.liviacare.worm.ActiveRecord<?, ?> activeRecord) {
+            activeRecord.__wormSetSnapshot(snapshot);
+            return;
+        }
+        synchronized (trackedSnapshots) {
+            trackedSnapshots.put(entity, snapshot);
+        }
+    }
+
+    private <T> void attachSnapshots(List<T> entities, EntityMetadata<T> metadata) {
+        if (!metadata.isTracked() || entities == null || entities.isEmpty()) {
+            return;
+        }
+        for (T entity : entities) {
+            attachSnapshot(entity, metadata);
+        }
+    }
+
+    private <T> void clearSnapshot(T entity, EntityMetadata<T> metadata) {
+        if (!metadata.isTracked() || entity == null) {
+            return;
+        }
+        if (entity instanceof br.com.liviacare.worm.ActiveRecord<?, ?> activeRecord) {
+            activeRecord.__wormClearSnapshot();
+            return;
+        }
+        synchronized (trackedSnapshots) {
+            trackedSnapshots.remove(entity);
+        }
+    }
+
     private <T, I> void hardDelete(EntityMetadata<T> metadata, I id) {
         final String sql = metadata.deleteSql();
         final List<Object> params = List.of(id);
@@ -847,11 +1003,12 @@ public class OrmManager implements OrmOperations {
             if (bulkWriter != null) {
                 int[] copyResult = bulkWriter.copyInsert(entities, meta);
                 if (copyResult != null) {
+                    attachSnapshots(entities, meta);
                     return copyResult;
                 }
             }
             // Fallback: batchUpdate dentro de transação única
-            return execWrite(() -> {
+            int[] results = execWrite(() -> {
                 final String sql = meta.insertSql();
                 final String entityName = meta.entityClass().getSimpleName();
                 final boolean fast = FastPathDecisionCache.canUseFastPath(meta.entityClass(), meta);
@@ -870,6 +1027,8 @@ public class OrmManager implements OrmOperations {
                 }
                 return executeBatchInChunks(sql, params, entityName);
             });
+            attachSnapshots(entities, meta);
+            return results;
         });
     }
 
@@ -880,11 +1039,12 @@ public class OrmManager implements OrmOperations {
             if (bulkWriter != null) {
                 int[] unnestResult = bulkWriter.unnestUpdate(entities, meta);
                 if (unnestResult != null) {
+                    attachSnapshots(entities, meta);
                     return unnestResult;
                 }
             }
             // Fallback: batchUpdate dentro de transação única
-            return execWrite(() -> {
+            int[] results = execWrite(() -> {
                 final String sql = meta.updateSql();
                 final String entityName = meta.entityClass().getSimpleName();
                 final boolean fast = FastPathDecisionCache.canUseFastPath(meta.entityClass(), meta);
@@ -908,22 +1068,24 @@ public class OrmManager implements OrmOperations {
                         }
                     }
                 }
-                int[] results;
+                int[] batchResults;
                 if (ormLogger.isDebugEnabled()) {
-                    results = ormLogger.logBatchAndExecute(SqlConstants.OP_UPDATE_BATCH, sql, params,
+                    batchResults = ormLogger.logBatchAndExecute(SqlConstants.OP_UPDATE_BATCH, sql, params,
                             () -> executeBatchInChunks(sql, params, entityName));
                 } else {
-                    results = executeBatchInChunks(sql, params, entityName);
+                    batchResults = executeBatchInChunks(sql, params, entityName);
                 }
                 if (meta.hasVersion()) {
-                    for (int i = 0; i < results.length; i++) {
-                        if (results[i] == 0) {
+                    for (int i = 0; i < batchResults.length; i++) {
+                        if (batchResults[i] == 0) {
                             throw new br.com.liviacare.worm.orm.exception.OptimisticLockException(meta.entityClass(), ids.get(i), versions.get(i));
                         }
                     }
                 }
-                return results;
+                return batchResults;
             });
+            attachSnapshots(entities, meta);
+            return results;
         });
     }
 
@@ -934,11 +1096,14 @@ public class OrmManager implements OrmOperations {
             if (bulkWriter != null) {
                 int[] unnestResult = bulkWriter.unnestDelete(entities, meta);
                 if (unnestResult != null) {
+                    for (T entity : entities) {
+                        clearSnapshot(entity, meta);
+                    }
                     return unnestResult;
                 }
             }
             // Fallback: batchUpdate dentro de transação única
-            return execWrite(() -> {
+            int[] results = execWrite(() -> {
                 final String sql = meta.softDeleteSql() != null ? meta.softDeleteSql() : meta.deleteSql();
                 final String entityName = meta.entityClass().getSimpleName();
                 final List<Object[]> params = new ArrayList<>(entities.size());
@@ -959,6 +1124,10 @@ public class OrmManager implements OrmOperations {
                 }
                 return executeBatchInChunks(sql, params, entityName);
             });
+            for (T entity : entities) {
+                clearSnapshot(entity, meta);
+            }
+            return results;
         });
     }
 
@@ -985,11 +1154,15 @@ public class OrmManager implements OrmOperations {
                 validateIdIsPresent(e, meta, "upsertAll");
                 params.add(EntityPersister.insertValuesArray(e, meta));
             }
+            int[] results;
             if (ormLogger.isDebugEnabled()) {
-                return ormLogger.logBatchAndExecute(SqlConstants.OP_UPSERT_BATCH, sql, params,
+                results = ormLogger.logBatchAndExecute(SqlConstants.OP_UPSERT_BATCH, sql, params,
                         () -> executeBatchInChunks(sql, params, entityName));
+            } else {
+                results = executeBatchInChunks(sql, params, entityName);
             }
-            return executeBatchInChunks(sql, params, entityName);
+            attachSnapshots(entities, meta);
+            return results;
         });
     }
 
@@ -1088,10 +1261,14 @@ public class OrmManager implements OrmOperations {
                     }
                 }).list();
 
-        return withModule(md, () ->
+        List<T> results = withModule(md, () ->
             ormLogger.logAndExecute("RAW_EXECUTE", sql, paramList,
                     () -> executor.timeAndRecord("RAW_EXECUTE", resultClass.getSimpleName(), supplier))
         );
+        if (md != null) {
+            attachSnapshots(results, md);
+        }
+        return results;
     }
 
     public <T> List<T> findAllWithCte(Class<T> entityClass, FilterBuilder filterWithCte) {
@@ -1103,8 +1280,10 @@ public class OrmManager implements OrmOperations {
             java.util.function.Supplier<List<T>> supplier = () -> executor.client().sql(sql).params(params)
                     .query((rs, _) -> EntityMapper.mapRow(rs, metadata)).list();
 
-            return ormLogger.logAndExecute(SqlConstants.OP_SELECT, sql, params,
+            List<T> results = ormLogger.logAndExecute(SqlConstants.OP_SELECT, sql, params,
                     () -> executor.timeAndRecord(SqlConstants.OP_SELECT, metadata.entityClass().getSimpleName(), supplier));
+            attachSnapshots(results, metadata);
+            return results;
         });
     }
 

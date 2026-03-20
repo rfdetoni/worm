@@ -11,7 +11,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.util.ClassUtils;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -121,11 +120,7 @@ public final class SqlExecutor {
         try {
             javax.sql.DataSource ds = resolveDataSource();
             if (ds == null) {
-                int[] results = new int[batchParams.size()];
-                for (int i = 0; i < batchParams.size(); i++) {
-                    results[i] = jdbcClient.sql(sql).params(Arrays.asList(batchParams.get(i))).update();
-                }
-                return results;
+                throw new IllegalStateException("Batch execution requires a resolvable DataSource");
             }
 
             return getOrCreateJdbcTemplate(ds).batchUpdate(sql, batchParams);

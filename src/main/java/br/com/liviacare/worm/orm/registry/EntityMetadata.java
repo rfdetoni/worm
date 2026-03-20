@@ -75,6 +75,10 @@ public final class EntityMetadata<T> {
     /** Logical module name from {@code @DbTable(module = "...")}, used to select DataSource. May be null. */
     private final String module;
 
+    // ── Dirty tracking ───────────────────────────────────────────────────────
+    /** True if entity is annotated with {@code @Track}, enabling dirty tracking. */
+    private final boolean tracked;
+
     // ── Column index (label → position in selectColumns) ────────────────────
     private final Map<String, Integer> columnIndex;
 
@@ -124,6 +128,7 @@ public final class EntityMetadata<T> {
         this.versionSetter      = b.versionSetter;
         this.defaultOrderBy     = b.defaultOrderBy;
         this.module             = b.module;
+        this.tracked            = b.tracked;
         this.columnIndex        = Map.copyOf(b.columnIndex);
     }
 
@@ -193,6 +198,8 @@ public final class EntityMetadata<T> {
     public String            defaultOrderBy()      { return defaultOrderBy; }
     /** Logical module name declared in {@code @DbTable(module = "...")}, or null if not set. */
     public String            module()              { return module; }
+    /** True if entity is annotated with {@code @Track}, enabling dirty tracking. */
+    public boolean           isTracked()           { return tracked; }
 
     public int columnIndex(String column) {
         return columnIndex.getOrDefault(column, -1);
@@ -234,6 +241,7 @@ public final class EntityMetadata<T> {
         String activeColumn, deletedAtColumn, versionColumn, defaultOrderBy;
         String module; // from @DbTable(module = "...")
         boolean hasActive, hasDeletedAt, hasVersion;
+        boolean tracked = false; // from @Track
         boolean activeDefaultValue = true; // mirrors @Active(defaultValue = true)
         MethodHandle idGetter, constructor, versionGetter, versionSetter;
         Optional<String> createdByColumn, createdAtColumn, updatedAtColumn;
