@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.util.ClassUtils;
 
@@ -20,7 +21,9 @@ public final class SqlExecutor {
 
     private final JdbcClient jdbcClient;
     private final javax.sql.DataSource dataSource;
-    private volatile javax.sql.DataSource reflectedDataSource;
+    // Cache da resolução por reflexão — resolvido apenas uma vez via DCL
+    private volatile javax.sql.DataSource resolvedDataSource;
+    private volatile JdbcTemplate jdbcTemplate;
 
     // Micrometer optional
     @Autowired(required = false)
@@ -106,73 +109,72 @@ public final class SqlExecutor {
     }
 
     public int[] executeBatch(String sql, List<Object[]> batchParams) {
+        return executeBatch(sql, batchParams, null);
+    }
+
+    public int[] executeBatch(String sql, List<Object[]> batchParams, String entityName) {
         if (batchParams == null || batchParams.isEmpty()) return new int[0];
-        // record batch size metric
+        if (entityName != null) {
+            recordBatchSize("batch", entityName, batchParams.size());
+        }
+
         try {
             javax.sql.DataSource ds = resolveDataSource();
-
             if (ds == null) {
-                // Fallback: execute per-row via jdbcClient (less efficient)
                 int[] results = new int[batchParams.size()];
                 for (int i = 0; i < batchParams.size(); i++) {
-                    Object[] p = batchParams.get(i);
-                    int r = jdbcClient.sql(sql).params(Arrays.asList(p)).update();
-                    results[i] = r;
+                    results[i] = jdbcClient.sql(sql).params(Arrays.asList(batchParams.get(i))).update();
                 }
                 return results;
             }
 
-            // before executing, emit batch size metric if possible
-            try {
-                // attempt to derive entityName from SQL (best-effort: use first table name token)
-                String entityName = "unknown";
-                try {
-                    String s = sql.trim();
-                    String[] parts = s.split("[\\s,]+");
-                    if (parts.length >= 3 && parts[0].equalsIgnoreCase("INSERT") && parts[1].equalsIgnoreCase("INTO")) {
-                        entityName = parts[2];
-                      } else if (parts.length >= 2 && parts[0].equalsIgnoreCase("UPDATE")) {
-                        entityName = parts[1];
-                      }
-                } catch (Exception ignored) {}
-                recordBatchSize("batch", entityName, batchParams.size());
-            } catch (Exception ignored) {}
-
-            try (java.sql.Connection conn = ds.getConnection();
-                 java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
-                for (Object[] params : batchParams) {
-                    for (int i = 0; i < params.length; i++) {
-                        ps.setObject(i + 1, params[i]);
-                    }
-                    ps.addBatch();
-                }
-                return ps.executeBatch();
-            }
+            return getOrCreateJdbcTemplate(ds).batchUpdate(sql, batchParams);
         } catch (Throwable t) {
             throw new RuntimeException("Batch execution failed", t);
         }
     }
 
-    private javax.sql.DataSource resolveDataSource() {
-        if (dataSource != null) {
-            return dataSource;
+    public javax.sql.DataSource dataSourceOrNull() {
+        return resolveDataSource();
+    }
+
+    private JdbcTemplate getOrCreateJdbcTemplate(javax.sql.DataSource ds) {
+        JdbcTemplate jt = jdbcTemplate;
+        if (jt != null) {
+            return jt;
         }
-        javax.sql.DataSource cached = reflectedDataSource;
-        if (cached != null) {
-            return cached;
-        }
-        try {
-            java.lang.reflect.Method m = jdbcClient.getClass().getMethod("getJdbcOperations");
-            Object ops = m.invoke(jdbcClient);
-            java.lang.reflect.Method gds = ops.getClass().getMethod("getDataSource");
-            Object dsObj = gds.invoke(ops);
-            if (dsObj instanceof javax.sql.DataSource ds) {
-                reflectedDataSource = ds;
-                return ds;
+        synchronized (this) {
+            jt = jdbcTemplate;
+            if (jt == null) {
+                jt = new JdbcTemplate(ds);
+                jdbcTemplate = jt;
             }
-        } catch (Throwable ignored) {
-            // fallback to null handled by caller
         }
-        return null;
+        return jt;
+    }
+
+    private javax.sql.DataSource resolveDataSource() {
+        // Primeiro: usar o dataSource injetado diretamente
+        if (dataSource != null) return dataSource;
+
+        // Segundo: checar cache volatile
+        javax.sql.DataSource cached = resolvedDataSource;
+        if (cached != null) return cached;
+
+        // Terceiro: resolver por reflexão UMA única vez via DCL
+        synchronized (this) {
+            if (resolvedDataSource != null) return resolvedDataSource;
+            try {
+                java.lang.reflect.Method m = jdbcClient.getClass().getMethod("getJdbcOperations");
+                Object ops = m.invoke(jdbcClient);
+                java.lang.reflect.Method gds = ops.getClass().getMethod("getDataSource");
+                Object dsObj = gds.invoke(ops);
+                if (dsObj instanceof javax.sql.DataSource ds) {
+                    resolvedDataSource = ds;
+                    return ds;
+                }
+            } catch (Throwable ignored) {}
+            return null;
+        }
     }
 }

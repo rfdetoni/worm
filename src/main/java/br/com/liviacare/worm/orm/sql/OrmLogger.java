@@ -22,9 +22,16 @@ public final class OrmLogger {
         this.externalLog = externalLog;
     }
 
+    public boolean isDebugEnabled() {
+        return log.isDebugEnabled() || (externalLog != null && externalLog.isDebugEnabled());
+    }
+
     public <T> T logAndExecute(String operation, String sql, List<Object> params, Supplier<T> action) {
         boolean debugMain = log.isDebugEnabled();
-        boolean debugExt  = externalLog != null && externalLog.isDebugEnabled();
+        boolean debugExt = externalLog != null && externalLog.isDebugEnabled();
+        if (!debugMain && !debugExt) {
+            return action.get();
+        }
 
         if (debugMain || debugExt) {
             String interpolated = SqlLogger.format(sql, params);
@@ -35,18 +42,14 @@ public final class OrmLogger {
         long start = System.nanoTime();
         try {
             T result = action.get();
-            if (debugMain || debugExt) {
-                long elapsed = System.nanoTime() - start;
-                if (debugMain) SqlLogger.log(log, operation, sql, params, elapsed);
-                if (debugExt)  SqlLogger.log(externalLog, operation, sql, params, elapsed);
-            }
+            long elapsed = System.nanoTime() - start;
+            if (debugMain) SqlLogger.log(log, operation, sql, params, elapsed);
+            if (debugExt) SqlLogger.log(externalLog, operation, sql, params, elapsed);
             return result;
         } catch (Throwable t) {
-            if (debugMain || debugExt) {
-                long elapsed = System.nanoTime() - start;
-                if (debugMain) SqlLogger.log(log, operation + "-FAILED", sql, params, elapsed);
-                if (debugExt)  SqlLogger.log(externalLog, operation + "-FAILED", sql, params, elapsed);
-            }
+            long elapsed = System.nanoTime() - start;
+            if (debugMain) SqlLogger.log(log, operation + "-FAILED", sql, params, elapsed);
+            if (debugExt) SqlLogger.log(externalLog, operation + "-FAILED", sql, params, elapsed);
             throw t;
         }
     }
@@ -57,7 +60,10 @@ public final class OrmLogger {
 
     public <T> T logBatchAndExecute(String operation, String sql, List<Object[]> params, Supplier<T> action) {
         boolean debugMain = log.isDebugEnabled();
-        boolean debugExt  = externalLog != null && externalLog.isDebugEnabled();
+        boolean debugExt = externalLog != null && externalLog.isDebugEnabled();
+        if (!debugMain && !debugExt) {
+            return action.get();
+        }
 
         if (debugMain || debugExt) {
             String interpolatedBatch = SqlLogger.formatBatch(sql, params);
@@ -68,18 +74,14 @@ public final class OrmLogger {
         long start = System.nanoTime();
         try {
             T result = action.get();
-            if (debugMain || debugExt) {
-                long elapsed = System.nanoTime() - start;
-                if (debugMain) SqlLogger.logBatch(log, operation, sql, params, elapsed);
-                if (debugExt)  SqlLogger.logBatch(externalLog, operation, sql, params, elapsed);
-            }
+            long elapsed = System.nanoTime() - start;
+            if (debugMain) SqlLogger.logBatch(log, operation, sql, params, elapsed);
+            if (debugExt) SqlLogger.logBatch(externalLog, operation, sql, params, elapsed);
             return result;
         } catch (Throwable t) {
-            if (debugMain || debugExt) {
-                long elapsed = System.nanoTime() - start;
-                if (debugMain) SqlLogger.logBatch(log, operation + "-FAILED", sql, params, elapsed);
-                if (debugExt)  SqlLogger.logBatch(externalLog, operation + "-FAILED", sql, params, elapsed);
-            }
+            long elapsed = System.nanoTime() - start;
+            if (debugMain) SqlLogger.logBatch(log, operation + "-FAILED", sql, params, elapsed);
+            if (debugExt) SqlLogger.logBatch(externalLog, operation + "-FAILED", sql, params, elapsed);
             throw t;
         }
     }

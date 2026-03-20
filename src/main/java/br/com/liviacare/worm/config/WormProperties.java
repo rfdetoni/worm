@@ -10,11 +10,21 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <pre>
  * worm:
  *   batch-size: 1000
- *   enable-schema-validation: true
+ *   insert-strategy: UPSERT
+ *   bulk-copy-threshold: 20
+ *   bulk-unnest-threshold: 10
  * </pre>
  */
 @ConfigurationProperties(prefix = "worm")
 public class WormProperties {
+
+    /**
+     * Estratégia para save() de entidades com ID pré-gerado (ex: UUIDv7).
+     * UPSERT     — emite ON CONFLICT DO UPDATE (1 round-trip, recomendado)
+     * TRY_UPDATE — UPDATE first, INSERT on 0 rows (2 round-trips para entidade nova)
+     * INSERT_ONLY — sempre INSERT, lança exceção em duplicata
+     */
+    public enum InsertStrategy { UPSERT, TRY_UPDATE, INSERT_ONLY }
 
     /** Batch size for batch insert/update operations. Default: 500 */
     private int batchSize = 500;
@@ -24,9 +34,26 @@ public class WormProperties {
 
     /**
      * When true, save() attempts UPDATE first (for entities with ID) and falls back to INSERT
-     * if no rows are affected. This avoids a read-before-write existsById() round-trip.
+     * if no rows are affected. Only used when insertStrategy=TRY_UPDATE.
      */
     private boolean saveTryUpdateFirst = true;
+
+    /**
+     * When true, single-row writes are executed inside a TransactionTemplate when available,
+     * reducing auto-commit/fsync overhead on databases like PostgreSQL.
+     */
+    private boolean transactionEnabled = true;
+
+    /**
+     * Estratégia de insert para save() com ID pré-gerado. Default: UPSERT (1 round-trip).
+     */
+    private InsertStrategy insertStrategy = InsertStrategy.UPSERT;
+
+    /** Threshold mínimo para usar COPY FROM STDIN em bulk insert. Default: 20 */
+    private int bulkCopyThreshold = 20;
+
+    /** Threshold mínimo para usar unnest em bulk update/delete. Default: 10 */
+    private int bulkUnnestThreshold = 10;
 
     public WormProperties() {
     }
@@ -55,12 +82,48 @@ public class WormProperties {
         this.saveTryUpdateFirst = saveTryUpdateFirst;
     }
 
+    public boolean isTransactionEnabled() {
+        return transactionEnabled;
+    }
+
+    public void setTransactionEnabled(boolean transactionEnabled) {
+        this.transactionEnabled = transactionEnabled;
+    }
+
+    public InsertStrategy getInsertStrategy() {
+        return insertStrategy;
+    }
+
+    public void setInsertStrategy(InsertStrategy insertStrategy) {
+        this.insertStrategy = insertStrategy;
+    }
+
+    public int getBulkCopyThreshold() {
+        return bulkCopyThreshold;
+    }
+
+    public void setBulkCopyThreshold(int bulkCopyThreshold) {
+        this.bulkCopyThreshold = bulkCopyThreshold;
+    }
+
+    public int getBulkUnnestThreshold() {
+        return bulkUnnestThreshold;
+    }
+
+    public void setBulkUnnestThreshold(int bulkUnnestThreshold) {
+        this.bulkUnnestThreshold = bulkUnnestThreshold;
+    }
+
     @Override
     public String toString() {
         return "WormProperties{" +
                 "batchSize=" + batchSize +
                 ", enableSchemaValidation=" + enableSchemaValidation +
                 ", saveTryUpdateFirst=" + saveTryUpdateFirst +
+                ", transactionEnabled=" + transactionEnabled +
+                ", insertStrategy=" + insertStrategy +
+                ", bulkCopyThreshold=" + bulkCopyThreshold +
+                ", bulkUnnestThreshold=" + bulkUnnestThreshold +
                 '}';
     }
 }

@@ -8,7 +8,6 @@ import org.postgresql.util.PGobject;
 import java.lang.invoke.MethodHandle;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.util.Optional;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
@@ -81,6 +80,57 @@ public final class EntityPersister {
     }
 
     /**
+     * Returns the bind-parameter array for an INSERT statement, in the
+     * same column order as {@link EntityMetadata#insertableColumns()}.
+     */
+    public static <T> Object[] insertValuesArray(T entity, EntityMetadata<T> metadata) {
+        final Object[] values = new Object[metadata.insertableColumns().size()];
+        final Instant now = Instant.now();
+
+        final String idCol = metadata.idColumnName();
+        final Optional<String> createdAtCol = metadata.createdAtColumn();
+        final Optional<String> updatedAtCol = metadata.updatedAtColumn();
+        final boolean hasActive = metadata.hasActive();
+        final String activeColumn = metadata.activeColumn();
+
+        int out = 0;
+        for (String column : metadata.insertableColumns()) {
+            if (column.equals(idCol)) {
+                try {
+                    values[out++] = metadata.idGetter().invoke(entity);
+                } catch (Throwable e) {
+                    throw new IllegalStateException("Failed to read ID column '" + column + "' from entity", e);
+                }
+                continue;
+            }
+
+            if (createdAtCol.isPresent() && createdAtCol.get().equals(column)) {
+                values[out++] = mapAuditValue(now, metadata, column);
+                continue;
+            }
+            if (updatedAtCol.isPresent() && updatedAtCol.get().equals(column)) {
+                values[out++] = mapAuditValue(now, metadata, column);
+                continue;
+            }
+
+            final int idx = metadata.columnIndex(column);
+            final MethodHandle getter = metadata.selectGetters()[idx];
+            try {
+                Object val = getter.invoke(entity);
+                if (hasActive && activeColumn.equals(column)) {
+                    if (val == null || metadata.selectTypes()[idx] == boolean.class) {
+                        val = metadata.activeDefaultValue();
+                    }
+                }
+                values[out++] = prepareValue(val, column, metadata, idx);
+            } catch (Throwable e) {
+                throw new IllegalStateException("Failed to read column '" + column + "' from entity", e);
+            }
+        }
+        return values;
+    }
+
+    /**
      * Returns the bind-parameter list for an UPDATE statement, in the
      * same column order as {@link EntityMetadata#updatableColumns()},
      * followed by the entity's ID as the final bind value.
@@ -112,6 +162,45 @@ public final class EntityPersister {
             try {
                 Object ver = metadata.versionGetter().invoke(entity);
                 values.add(ver); // version bind for WHERE ... AND version_col = ?
+            } catch (Throwable e) {
+                throw new IllegalStateException("Failed to read version value from entity", e);
+            }
+        }
+        return values;
+    }
+
+    /**
+     * Returns the bind-parameter array for an UPDATE statement, in the
+     * same column order as {@link EntityMetadata#updatableColumns()},
+     * followed by the entity's ID and optional version bind values.
+     */
+    public static <T> Object[] updateValuesArray(T entity, EntityMetadata<T> metadata, Object id) {
+        final Object[] values = new Object[metadata.updatableColumns().size() + 1 + (metadata.hasVersion() ? 1 : 0)];
+        final Instant now = Instant.now();
+
+        final Optional<String> updatedAtCol = metadata.updatedAtColumn();
+        final boolean hasUpdatedAt = updatedAtCol.isPresent();
+
+        int out = 0;
+        for (String column : metadata.updatableColumns()) {
+            if (hasUpdatedAt && updatedAtCol.get().equals(column)) {
+                values[out++] = mapAuditValue(now, metadata, column);
+                continue;
+            }
+            final int idx = metadata.columnIndex(column);
+            final MethodHandle getter = metadata.selectGetters()[idx];
+            try {
+                Object val = getter.invoke(entity);
+                values[out++] = prepareValue(val, column, metadata, idx);
+            } catch (Throwable e) {
+                throw new IllegalStateException("Failed to read column '" + column + "' from entity", e);
+            }
+        }
+
+        values[out++] = id;
+        if (metadata.hasVersion()) {
+            try {
+                values[out] = metadata.versionGetter().invoke(entity);
             } catch (Throwable e) {
                 throw new IllegalStateException("Failed to read version value from entity", e);
             }

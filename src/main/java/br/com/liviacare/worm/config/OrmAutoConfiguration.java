@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 
@@ -36,9 +37,14 @@ public class OrmAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(OrmOperations.class)
-    public OrmOperations ormManager(DataSource dataSource, WormProperties properties, SqlDialect sqlDialect) {
+    public OrmOperations ormManager(
+            DataSource dataSource,
+            WormProperties properties,
+            SqlDialect sqlDialect,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            PlatformTransactionManager transactionManager) {
         JdbcClient jdbcClient = JdbcClient.create(dataSource);
-        OrmManager manager = new OrmManager(jdbcClient, properties, sqlDialect, dataSource);
+        OrmManager manager = new OrmManager(jdbcClient, properties, sqlDialect, dataSource, transactionManager);
         OrmManagerLocator.setOrmManager(manager);
         return manager;
     }
