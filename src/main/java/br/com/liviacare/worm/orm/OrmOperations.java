@@ -105,6 +105,8 @@ public interface OrmOperations {
 
     <T> List<T> executeRaw(String sql, Class<T> resultClass, Object... params);
 
+    <T> List<T> executeRawPaged(String baseSql, Class<T> resultClass, int limit, long offset, Object... params);
+
     /** Exposes the underlying {@link JdbcClient} for advanced use cases. */
     JdbcClient client();
 }

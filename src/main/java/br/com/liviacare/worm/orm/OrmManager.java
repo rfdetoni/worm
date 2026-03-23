@@ -52,6 +52,13 @@ public class OrmManager implements OrmOperations {
     private final TransactionTemplate txTemplate;
     private final PostgresBulkWriter bulkWriter;
     private final java.util.concurrent.ConcurrentMap<String, String> partialUpdateSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentMap<Class<?>, String> insertSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentMap<Class<?>, String> updateSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentMap<Class<?>, String> deleteSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentMap<Class<?>, String> softDeleteSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentMap<Class<?>, String> saveUpsertSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentMap<Class<?>, String> batchUpsertSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentMap<String, String> pagedSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<Object, EntitySnapshot> trackedSnapshots = Collections.synchronizedMap(new WeakHashMap<>());
     private final boolean parallelMappingEnabled;
     private final int parallelMappingThreshold;
@@ -132,8 +139,7 @@ public class OrmManager implements OrmOperations {
                 execWrite(() -> {
                     if (entity instanceof iBaseEntity base) base.created();
                     validateIdIsPresent(entity, metadata, "save");
-                    final String upsertSql = metadata.upsertSql();
-                    final String sql = (upsertSql != null && !upsertSql.isBlank()) ? upsertSql : metadata.insertSql();
+                    final String sql = resolveSaveUpsertSql(metadata);
                     final List<Object> params = fast
                             ? EntityPersisterFastPath.insertValuesFast(entity, metadata)
                             : EntityPersister.insertValues(entity, metadata);
@@ -155,7 +161,7 @@ public class OrmManager implements OrmOperations {
                         if (entity instanceof iBaseEntity base) {
                             base.updated();
                         }
-                        final String updateSql = metadata.updateSql();
+                        final String updateSql = resolveUpdateSql(metadata);
                         final List<Object> updateParams = fast
                                 ? EntityPersisterFastPath.updateValuesFast(entity, metadata, capturedId)
                                 : EntityPersister.updateValues(entity, metadata, capturedId);
@@ -173,7 +179,7 @@ public class OrmManager implements OrmOperations {
                             base.created();
                         }
                         validateIdIsPresent(entity, metadata, "save");
-                        final String insertSql = metadata.insertSql();
+                        final String insertSql = resolveInsertSql(metadata);
                         final List<Object> insertParams = fast
                                 ? EntityPersisterFastPath.insertValuesFast(entity, metadata)
                                 : EntityPersister.insertValues(entity, metadata);
@@ -191,7 +197,7 @@ public class OrmManager implements OrmOperations {
                             base.created();
                         }
                         validateIdIsPresent(entity, metadata, "save");
-                        final String insertSql = metadata.insertSql();
+                        final String insertSql = resolveInsertSql(metadata);
                         final List<Object> insertParams = fast
                                 ? EntityPersisterFastPath.insertValuesFast(entity, metadata)
                                 : EntityPersister.insertValues(entity, metadata);
@@ -210,7 +216,7 @@ public class OrmManager implements OrmOperations {
                             if (entity instanceof iBaseEntity base) {
                                 base.updated();
                             }
-                            final String updateSql = metadata.updateSql();
+                            final String updateSql = resolveUpdateSql(metadata);
                             final List<Object> updateParams = fast
                                     ? EntityPersisterFastPath.updateValuesFast(entity, metadata, capturedId)
                                     : EntityPersister.updateValues(entity, metadata, capturedId);
@@ -232,7 +238,7 @@ public class OrmManager implements OrmOperations {
                     base.created();
                 }
                 validateIdIsPresent(entity, metadata, "save");
-                final String sql = metadata.insertSql();
+                final String sql = resolveInsertSql(metadata);
                 final List<Object> params = fast
                         ? EntityPersisterFastPath.insertValuesFast(entity, metadata)
                         : EntityPersister.insertValues(entity, metadata);
@@ -792,6 +798,34 @@ public class OrmManager implements OrmOperations {
         }
     }
 
+    private <T> String resolveInsertSql(EntityMetadata<T> metadata) {
+        return insertSqlCache.computeIfAbsent(metadata.entityClass(), ignored -> metadata.insertSql());
+    }
+
+    private <T> String resolveUpdateSql(EntityMetadata<T> metadata) {
+        return updateSqlCache.computeIfAbsent(metadata.entityClass(), ignored -> metadata.updateSql());
+    }
+
+    private <T> String resolveDeleteSql(EntityMetadata<T> metadata) {
+        return deleteSqlCache.computeIfAbsent(metadata.entityClass(), ignored -> metadata.deleteSql());
+    }
+
+    private <T> String resolveSoftDeleteSql(EntityMetadata<T> metadata) {
+        return softDeleteSqlCache.computeIfAbsent(metadata.entityClass(), ignored -> metadata.softDeleteSql());
+    }
+
+    private <T> String resolveSaveUpsertSql(EntityMetadata<T> metadata) {
+        return saveUpsertSqlCache.computeIfAbsent(metadata.entityClass(), ignored -> {
+            String upsertSql = metadata.upsertSql();
+            return (upsertSql != null && !upsertSql.isBlank()) ? upsertSql : metadata.insertSql();
+        });
+    }
+
+    private <T> String resolveBatchUpsertSql(EntityMetadata<T> metadata) {
+        return batchUpsertSqlCache.computeIfAbsent(metadata.entityClass(), ignored ->
+                (this.dialect != null) ? this.dialect.buildUpsertSql(metadata) : metadata.insertSql());
+    }
+
     private <T> void doFullUpdate(T entity, EntityMetadata<T> metadata) {
         final Object id = validateIdIsPresent(entity, metadata, "update");
 
@@ -800,7 +834,7 @@ public class OrmManager implements OrmOperations {
         }
 
         final boolean fast = FastPathDecisionCache.canUseFastPath(metadata.entityClass(), metadata);
-        final String sql = metadata.updateSql();
+        final String sql = resolveUpdateSql(metadata);
         final List<Object> params = fast
                 ? EntityPersisterFastPath.updateValuesFast(entity, metadata, id)
                 : EntityPersister.updateValues(entity, metadata, id);
@@ -946,7 +980,7 @@ public class OrmManager implements OrmOperations {
     }
 
     private <T, I> void hardDelete(EntityMetadata<T> metadata, I id) {
-        final String sql = metadata.deleteSql();
+        final String sql = resolveDeleteSql(metadata);
         final List<Object> params = List.of(id);
         if (ormLogger.isDebugEnabled()) {
             ormLogger.logAndExecute(SqlConstants.OP_DELETE, sql, params,
@@ -957,7 +991,7 @@ public class OrmManager implements OrmOperations {
     }
 
     private <T, I> void softDelete(EntityMetadata<T> metadata, I id) {
-        final String sql = metadata.softDeleteSql();
+        final String sql = resolveSoftDeleteSql(metadata);
         final List<Object> params;
         final Runnable execution;
 
@@ -1098,7 +1132,7 @@ public class OrmManager implements OrmOperations {
             }
             // Fallback: batchUpdate dentro de transação única
             int[] results = execWrite(() -> {
-                final String sql = meta.insertSql();
+                final String sql = resolveInsertSql(meta);
                 final String entityName = meta.entityClass().getSimpleName();
                 final boolean fast = FastPathDecisionCache.canUseFastPath(meta.entityClass(), meta);
                 final List<Object[]> params = new ArrayList<>(entities.size());
@@ -1134,7 +1168,7 @@ public class OrmManager implements OrmOperations {
             }
             // Fallback: batchUpdate dentro de transação única
             int[] results = execWrite(() -> {
-                final String sql = meta.updateSql();
+                final String sql = resolveUpdateSql(meta);
                 final String entityName = meta.entityClass().getSimpleName();
                 final boolean fast = FastPathDecisionCache.canUseFastPath(meta.entityClass(), meta);
                 final List<Object[]> params = new ArrayList<>(entities.size());
@@ -1193,7 +1227,7 @@ public class OrmManager implements OrmOperations {
             }
             // Fallback: batchUpdate dentro de transação única
             int[] results = execWrite(() -> {
-                final String sql = meta.softDeleteSql() != null ? meta.softDeleteSql() : meta.deleteSql();
+                final String sql = meta.softDeleteSql() != null ? resolveSoftDeleteSql(meta) : resolveDeleteSql(meta);
                 final String entityName = meta.entityClass().getSimpleName();
                 final List<Object[]> params = new ArrayList<>(entities.size());
                 for (T e : entities) {
@@ -1224,7 +1258,7 @@ public class OrmManager implements OrmOperations {
         if (entities == null || entities.isEmpty()) return new int[0];
         final EntityMetadata<T> meta = getRequiredMetadata((Class<T>) entities.get(0).getClass());
         return withModule(meta, () -> {
-            final String sql = (this.dialect != null) ? this.dialect.buildUpsertSql(meta) : meta.insertSql();
+            final String sql = resolveBatchUpsertSql(meta);
             final String entityName = meta.entityClass().getSimpleName();
             final List<Object[]> params = new ArrayList<>(entities.size());
             for (T e : entities) {
@@ -1346,6 +1380,16 @@ public class OrmManager implements OrmOperations {
             attachSnapshots(results, md);
         }
         return results;
+    }
+
+    @Override
+    public <T> List<T> executeRawPaged(String baseSql, Class<T> resultClass, int limit, long offset, Object... params) {
+        String paginatedSql = pagedSqlCache.computeIfAbsent(baseSql, ignored -> baseSql + " LIMIT ? OFFSET ?");
+        Object[] input = params == null ? new Object[0] : params;
+        Object[] pagedParams = Arrays.copyOf(input, input.length + 2);
+        pagedParams[input.length] = limit;
+        pagedParams[input.length + 1] = offset;
+        return executeRaw(paginatedSql, resultClass, pagedParams);
     }
 
     public <T> List<T> findAllWithCte(Class<T> entityClass, FilterBuilder filterWithCte) {

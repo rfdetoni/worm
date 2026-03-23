@@ -73,6 +73,7 @@ class QueryRepositoryFactoryTest {
 
         assertEquals(2, slice.content().size());
         assertTrue(slice.hasNext());
+        assertEquals("executeRawPaged", orm.executedMethod);
         assertEquals("select id, name from users LIMIT ? OFFSET ?", orm.executedSql);
         assertEquals(List.of(3, 0L), orm.executedParams);
     }
@@ -81,6 +82,7 @@ class QueryRepositoryFactoryTest {
         private final List<?> response;
         private String executedSql;
         private List<Object> executedParams;
+        private String executedMethod;
 
         private RecordingOrmOperations(List<?> response) {
             this.response = response;
@@ -108,9 +110,26 @@ class QueryRepositoryFactoryTest {
                 }
             }
             if ("executeRaw".equals(method.getName())) {
+                executedMethod = method.getName();
                 executedSql = (String) args[0];
                 Object rawParams = args.length > 2 ? args[2] : null;
                 executedParams = rawParams instanceof Object[] array ? Arrays.asList(array) : List.of();
+                return new ArrayList<>(response);
+            }
+            if ("executeRawPaged".equals(method.getName())) {
+                executedMethod = method.getName();
+                String baseSql = (String) args[0];
+                int limit = (int) args[2];
+                long offset = (long) args[3];
+                Object rawParams = args.length > 4 ? args[4] : null;
+                List<Object> merged = new ArrayList<>();
+                if (rawParams instanceof Object[] array) {
+                    merged.addAll(Arrays.asList(array));
+                }
+                merged.add(limit);
+                merged.add(offset);
+                executedSql = baseSql + " LIMIT ? OFFSET ?";
+                executedParams = merged;
                 return new ArrayList<>(response);
             }
             throw new UnsupportedOperationException(method.getName());

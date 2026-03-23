@@ -123,25 +123,22 @@ public final class QueryRepositoryFactory {
     private static final class NativeQueryMethod {
         private final Method method;
         private final String parsedSql;
-        private final List<String> parameterNames;
+        private final int[] parameterIndexes;
         private final QueryReturnKind returnKind;
         private final Class<?> resultType;
-        private final Map<String, ParameterDescriptor> parameterByName;
         private final int pageableIndex;
 
         private NativeQueryMethod(Method method,
                                   String parsedSql,
-                                  List<String> parameterNames,
+                                  int[] parameterIndexes,
                                   QueryReturnKind returnKind,
                                   Class<?> resultType,
-                                  Map<String, ParameterDescriptor> parameterByName,
                                   int pageableIndex) {
             this.method = method;
             this.parsedSql = parsedSql;
-            this.parameterNames = parameterNames;
+            this.parameterIndexes = parameterIndexes;
             this.returnKind = returnKind;
             this.resultType = resultType;
-            this.parameterByName = parameterByName;
             this.pageableIndex = pageableIndex;
         }
 
@@ -168,7 +165,7 @@ public final class QueryRepositoryFactory {
                     continue;
                 }
                 String name = resolveParameterName(parameter, i);
-                if (parameterByName.put(name, new ParameterDescriptor(i, name)) != null) {
+                if (parameterByName.put(name, new ParameterDescriptor(i)) != null) {
                     throw new IllegalArgumentException("Duplicate parameter name: " + name);
                 }
             }
@@ -191,18 +188,23 @@ public final class QueryRepositoryFactory {
                     throw new IllegalArgumentException("@Query references parameters " + missingInMethod + " that are not declared");
                 }
             }
-            return new NativeQueryMethod(method, namedSql.sql(), Collections.unmodifiableList(namedSql.parameterNames()), returnKind, resultType, parameterByName, pageableIndex);
+            int[] parameterIndexes = new int[namedSql.parameterNames().size()];
+            for (int i = 0; i < namedSql.parameterNames().size(); i++) {
+                String name = namedSql.parameterNames().get(i);
+                parameterIndexes[i] = parameterByName.get(name).index;
+            }
+            return new NativeQueryMethod(method, namedSql.sql(), parameterIndexes, returnKind, resultType, pageableIndex);
         }
 
         Object execute(Object[] args, OrmOperations ormOperations) {
             Object[] actualArgs = args == null ? new Object[0] : args;
-            List<Object> resolvedParameters = resolveParameters(actualArgs);
+            Object[] resolvedParameters = resolveParameters(actualArgs);
             switch (returnKind) {
                 case LIST -> {
-                    return ormOperations.executeRaw(parsedSql, resultType, resolvedParameters.toArray());
+                    return ormOperations.executeRaw(parsedSql, resultType, resolvedParameters);
                 }
                 case OPTIONAL -> {
-                    List<?> results = ormOperations.executeRaw(parsedSql, resultType, resolvedParameters.toArray());
+                    List<?> results = ormOperations.executeRaw(parsedSql, resultType, resolvedParameters);
                     return results.isEmpty() ? Optional.empty() : Optional.ofNullable(results.get(0));
                 }
                 case SLICE -> {
@@ -212,30 +214,34 @@ public final class QueryRepositoryFactory {
                         throw new IllegalArgumentException("Pageable pageSize must be greater than zero");
                     }
                     long offset = pageable.getOffset();
-                    String paginatedSql = parsedSql + " LIMIT ? OFFSET ?";
-                    List<Object> pagedParameters = new ArrayList<>(resolvedParameters.size() + 2);
-                    pagedParameters.addAll(resolvedParameters);
-                    pagedParameters.add(pageSize + 1);
-                    pagedParameters.add(offset);
-                    List<?> results = ormOperations.executeRaw(paginatedSql, resultType, pagedParameters.toArray());
+                    List<?> results = ormOperations.executeRawPaged(parsedSql, resultType, pageSize + 1, offset, resolvedParameters);
                     boolean hasNext = results.size() > pageSize;
-                    List<?> content = hasNext ? new ArrayList<>(results.subList(0, pageSize)) : new ArrayList<>(results);
+                    List<?> content = hasNext ? trimToPageSize(results, pageSize) : results;
                     return new Slice<>(content, pageable, hasNext);
                 }
                 default -> throw new IllegalStateException("Unsupported return kind: " + returnKind);
             }
         }
 
-        private List<Object> resolveParameters(Object[] args) {
-            if (parameterNames.isEmpty()) {
-                return Collections.emptyList();
+        private Object[] resolveParameters(Object[] args) {
+            if (parameterIndexes.length == 0) {
+                return new Object[0];
             }
-            List<Object> resolved = new ArrayList<>(parameterNames.size());
-            for (String name : parameterNames) {
-                ParameterDescriptor descriptor = parameterByName.get(name);
-                resolved.add(descriptor.valueFrom(args));
+            Object[] resolved = new Object[parameterIndexes.length];
+            for (int i = 0; i < parameterIndexes.length; i++) {
+                int index = parameterIndexes[i];
+                resolved[i] = index < args.length ? args[index] : null;
             }
             return resolved;
+        }
+
+        @SuppressWarnings("unchecked")
+        private static List<?> trimToPageSize(List<?> results, int pageSize) {
+            if (results instanceof ArrayList<?> mutableResults) {
+                ((ArrayList<Object>) mutableResults).remove(pageSize);
+                return mutableResults;
+            }
+            return new ArrayList<>(results.subList(0, pageSize));
         }
 
         private Pageable requirePageable(Object[] args) {
@@ -261,16 +267,9 @@ public final class QueryRepositoryFactory {
 
     private static final class ParameterDescriptor {
         private final int index;
-        private final String name;
 
-        private ParameterDescriptor(int index, String name) {
+        private ParameterDescriptor(int index) {
             this.index = index;
-            this.name = name;
-        }
-
-        private Object valueFrom(Object[] args) {
-            if (index < 0 || index >= args.length) return null;
-            return args[index];
         }
     }
 
