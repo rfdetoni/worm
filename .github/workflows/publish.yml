@@ -1,4 +1,4 @@
-name: Publish to GitHub Packages
+name: CI Build and Release
 
 on:
   push:
@@ -7,47 +7,43 @@ on:
       - master
     tags:
       - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 25 and configure Maven settings for GitHub Packages
+      - name: Set up JDK and cache Maven
         uses: actions/setup-java@v4
         with:
-          java-version: '25'
+          java-version: '17'
           distribution: 'temurin'
           cache: maven
-          server-id: github
-          server-username: ${{ github.actor }}
-          server-password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run tests
-        run: ./mvnw -B verify
+        run: |
+          ./mvnw -B -DskipTests verify
 
-      - name: Build project
-        run: ./mvnw -B clean package
+      - name: Build package
+        run: |
+          ./mvnw -B -DskipTests clean package
 
-      - name: Publish to GitHub Packages
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./mvnw -B deploy -DskipTests
-
-      - name: Create Release
+      - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            Release created by CI for tag ${{ github.ref_name }}.
           draft: false
           prerelease: false
 
