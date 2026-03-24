@@ -1,0 +1,5 @@
+br.com.liviacare.worm.orm.registry.GeneratedMetadataLookupTest$AptLookupEntityFactory
+br.com.liviacare.worm.orm.registry.GeneratedMetadataLookupTest$AptAuditedEntityFactory
+br.com.liviacare.worm.orm.registry.GeneratedMetadataLookupTest$AptUserWithDepartmentFactory
+br.com.liviacare.worm.orm.registry.GeneratedMetadataLookupTest$AptBoundEntityFactory
+

@@ -29,6 +29,9 @@ A comprehensive English guide to modeling, querying, and persisting data with WO
 - [23. Best practices](#23-best-practices)
 - [24. Common patterns](#24-common-patterns)
 - [25. Quick API map](#25-quick-api-map)
+- [26. Static metamodel and type-safe filters](#26-static-metamodel-and-type-safe-filters)
+- [27. Performance guide](#27-performance-guide)
+- [28. `@DbJoin` relationships with ActiveRecord](#28-dbjoin-relationships-with-activerecord)
 
 ---
 
@@ -490,15 +493,24 @@ Available methods include:
 - `in`, `inIfNotEmpty`
 - `isNull`, `isNotNull`
 
-Example:
+All of the above accept either a plain `String` column name (classic) **or** a typed `WormAttribute<E,V>` descriptor from the static metamodel (see [Section 26](#26-static-metamodel-and-type-safe-filters)):
 
 ```java
+// Classic — string column names
 FilterBuilder filter = FilterBuilder.create()
     .eq("active", true)
     .gte("age", 18)
     .lte("age", 65)
     .like("name", "%Ali%")
     .in("role", List.of("ADMIN", "MANAGER"));
+
+// Type-safe — WormAttribute constants generated at compile time
+FilterBuilder filter = FilterBuilder.create()
+    .eq(User_.active, true)          // compile-time type: Boolean
+    .gte(User_.age, 18)              // compile-time type: Integer
+    .lte(User_.age, 65)
+    .like(User_.name, "%Ali%")       // compile-time type: String
+    .in(User_.role, List.of("ADMIN", "MANAGER"));
 ```
 
 ### 8.3 OR groups and parentheses
@@ -526,6 +538,8 @@ Also available:
 
 - `orderBy(String column)`
 - `orderByDesc(String column)`
+- `orderBy(WormAttribute<?,?> attr)` — type-safe, uses generated column name
+- `orderByDesc(WormAttribute<?,?> attr)` — type-safe descending
 - `orderBy(Pageable.Sort sort)`
 - `orderByRaw(String clause)`
 - `groupBy(String... columns)`
@@ -571,6 +585,20 @@ FilterBuilder filter = FilterBuilder.create()
     .withCte("active_users", "select * from users where active = true")
     .addWindowFunction("row_number() over (partition by department_id order by created_at desc)", "rn");
 ```
+
+### 8.9 Raw WHERE fragments
+
+When no built-in predicate fits, append a hand-written SQL clause and its bind parameters:
+
+```java
+FilterBuilder filter = FilterBuilder.create()
+    .rawWhere("age BETWEEN ? AND ?", List.of(18, 65))
+    .rawWhere("lower(email) LIKE lower(?)", List.of("%@example.com"));
+```
+
+The fragment is appended as-is with an implicit `AND` to any preceding conditions. Bind values are appended in the same order as the `?` placeholders.
+
+> **Use sparingly.** Prefer typed predicates when possible — `rawWhere` bypasses column-name validation.
 
 ---
 
@@ -720,6 +748,47 @@ FilterBuilder filter = FilterBuilder.create()
     .leftJoin("departments", "d", "d.id = a.department_id")
     .eq("d.active", true);
 ```
+
+### 11.7 Controlling collection fetch strategy with `fetchMode`
+
+By default, a collection `@DbJoin` generates a `LEFT JOIN` that produces one row per (parent, child) combination. For parents with large collections this inflates the result set significantly ("Cartesian explosion").
+
+Use `fetchMode = DbJoin.FetchMode.BATCH` to replace the JOIN with two targeted queries:
+
+```java
+// Default JOIN strategy — one query, Cartesian result set
+@DbJoin(mappedBy = "order_id")
+private List<OrderItem> items;
+
+// BATCH strategy — two queries, no Cartesian product
+@DbJoin(mappedBy = "order_id", fetchMode = DbJoin.FetchMode.BATCH)
+private List<OrderItem> items;
+```
+
+**How BATCH works internally:**
+
+1. The parent query runs with the collection join suppressed.
+2. All parent IDs are collected.
+3. WORM executes `SELECT * FROM order_items WHERE order_id IN (?, …)` chunked to ≤ 1 000 IDs per round-trip.
+4. Children are grouped by FK in memory and injected into each parent.
+
+**When to use BATCH:**
+
+| Scenario | Recommended strategy |
+|----------|---------------------|
+| Collection has ≤ 5 items on average | `JOIN` (default) |
+| Collection has > 5–10 items on average | `BATCH` |
+| Reporting query that needs a single SQL plan | `JOIN` |
+| Hot-path API loading a list of parents with deep children | `BATCH` |
+
+**Available `FetchMode` values:**
+
+| Value | Description |
+|-------|-------------|
+| `FetchMode.JOIN` | Standard `LEFT JOIN` + in-memory merge (default). |
+| `FetchMode.BATCH` | Two-query `IN`-clause batch. Only effective on `List` / `Collection` fields. |
+
+> **Note** `fetchMode = BATCH` on a non-collection (scalar) field is silently ignored — the default `JOIN` strategy is used instead.
 
 ---
 
@@ -936,7 +1005,64 @@ Use batch methods when:
 - you want chunked execution under WORM control;
 - you want to take advantage of PostgreSQL bulk paths when configured.
 
-### 16.3 Important note
+### 16.3 PostgreSQL bulk paths (BulkWriter SPI)
+
+All bulk operations route through the `BulkWriter` interface, obtained at startup via
+`SqlDialect.createBulkWriter(dataSource, copyThreshold, unnestThreshold)`.
+
+**PostgreSQL strategies:**
+
+| Operation | Strategy | Activation threshold |
+|-----------|----------|----------------------|
+| `saveAllBatch` / `bulkInsert` | PostgreSQL `COPY` protocol | `worm.bulk-copy-threshold` (default 20) |
+| `updateAllBatch` / `bulkUpdate` | `unnest`-array `UPDATE` | `worm.bulk-unnest-threshold` (default 10) |
+| `deleteAllBatch` / `bulkDelete` | `unnest`-array `DELETE` | `worm.bulk-unnest-threshold` |
+| `upsertAllBatch` / `bulkUpsert` | `INSERT … SELECT FROM unnest(…) ON CONFLICT (id) DO UPDATE` | `worm.bulk-copy-threshold` |
+
+Below the threshold WORM falls back to a standard JDBC batch. Other dialects return `null` from `createBulkWriter` and always use JDBC batch.
+
+### 16.4 Implementing a custom BulkWriter
+
+Provide a custom bulk strategy by implementing `BulkWriter` and registering it in a custom `SqlDialect`:
+
+```java
+public class MyBulkWriter implements BulkWriter {
+
+    @Override
+    public <T> int[] bulkInsert(List<T> entities, EntityMetadata<T> meta) {
+        // driver-specific fast path, or return null to fall back to JDBC batch
+        return null;
+    }
+
+    @Override
+    public <T> int[] bulkUpdate(List<T> entities, EntityMetadata<T> meta) { return null; }
+
+    @Override
+    public <T> int[] bulkDelete(List<T> entities, EntityMetadata<T> meta) { return null; }
+
+    @Override
+    public <T> int[] bulkUpsert(List<T> entities, EntityMetadata<T> meta) { return null; }
+}
+
+public class MyDialect implements SqlDialect {
+
+    @Override
+    public BulkWriter createBulkWriter(DataSource ds, int copyThreshold, int unnestThreshold) {
+        return new MyBulkWriter(ds);
+    }
+
+    // ... other dialect methods
+}
+
+@Bean
+public SqlDialect sqlDialect() {
+    return new MyDialect();
+}
+```
+
+Returning `null` from any `BulkWriter` method signals "strategy not applicable" — WORM will fall back to standard JDBC batch for that operation automatically.
+
+### 16.5 Important note
 
 Real batch execution depends on a resolvable `DataSource`.
 WORM is designed to fail instead of silently degrading when a true batch path is required.
@@ -1380,6 +1506,33 @@ user.update();
 - `OrmOperations.executeRaw(...)`
 - `OrmOperations.jsonPathQueryFirst(...)`
 - `OrmOperations.saveAll/updateAll/deleteAll/upsertAll(...)`
+- `OrmOperations.saveAllBatch/updateAllBatch/deleteAllBatch/upsertAllBatch(...)` — routes to `BulkWriter` fast paths
+
+### FilterBuilder predicate APIs
+
+- String-column predicates: `eq`, `neq`, `gt`, `lt`, `gte`, `lte`, `like`, `in`, `isNull`, `isNotNull`
+- Typed predicates (same names, first arg `WormAttribute<E,V>`): `eq(attr, value)`, `orderBy(attr)`, `orderByDesc(attr)`, etc.
+- `rawWhere(String rawSql, List<Object> params)` — raw SQL fragment with bound parameters
+- `openParen()` / `closeParen()` / `or()` — grouping and OR logic
+- `leftJoin(table, alias, on)` — ad-hoc join
+- `withCte(name, sql)` / `addWindowFunction(expr, alias)` — CTEs and windows
+- `ignoreSoftDelete()` — bypass automatic soft-delete filter
+- `notJoin()` — suppress metadata-defined joins
+
+### Metamodel APIs
+
+- `{Entity}_.COLUMN_<UPPER_SNAKE>` — raw column name string constant
+- `{Entity}_.<fieldName>` — `WormAttribute<Entity, FieldType>` typed descriptor
+- `WormAttribute.of(columnName, type)` — manual attribute descriptor factory
+
+### Bulk SPI APIs
+
+- `BulkWriter.bulkInsert(entities, meta)`
+- `BulkWriter.bulkUpdate(entities, meta)`
+- `BulkWriter.bulkDelete(entities, meta)`
+- `BulkWriter.bulkUpsert(entities, meta)`
+- `SqlDialect.createBulkWriter(dataSource, copyThreshold, unnestThreshold)` — factory method
+- `QueryPlanCache.clear()` — flush the compiled query plan cache
 
 ### Repository APIs
 
@@ -1391,4 +1544,337 @@ user.update();
 ---
 
 This guide is intended to be practical first: start with the style that best matches your team, then add joins, projections, repositories, tracking, and batch support only where they provide clear value.
+
+---
+
+## 26. Static metamodel and type-safe filters
+
+### 26.1 What the metamodel is
+
+`WormMetamodelProcessor` is an annotation processor that runs at compile time and generates a companion class `{Entity}_.java` for every class annotated with `@DbTable`.
+
+Each generated class contains:
+
+- `public static final String COLUMN_<UPPER_SNAKE>` — the raw DB column name as a constant string.
+- `public static final WormAttribute<EntityType, FieldType> <fieldName>` — a typed descriptor that carries both the column name and the Java type of its value.
+
+`@DbJoin` fields are excluded from the metamodel — only mapped columns appear.
+
+### 26.2 Generated output
+
+Given the entity:
+
+```java
+@DbTable("orders")
+public class Order {
+    @DbId("id")
+    private UUID id;
+
+    @DbColumn("status")
+    private String status;
+
+    @DbColumn("total_amount")
+    private BigDecimal totalAmount;
+
+    @CreatedAt
+    private Instant createdAt;
+}
+```
+
+The processor generates:
+
+```java
+// Generated — do not edit
+@Generated("br.com.liviacare.worm.processor.WormMetamodelProcessor")
+public final class Order_ {
+
+    private Order_() {}
+
+    /** DB column for {@code id}. */
+    public static final String COLUMN_ID = "id";
+    public static final WormAttribute<Order, java.util.UUID> id =
+        new WormAttribute<>("id", java.util.UUID.class);
+
+    /** DB column for {@code status}. */
+    public static final String COLUMN_STATUS = "status";
+    public static final WormAttribute<Order, String> status =
+        new WormAttribute<>("status", String.class);
+
+    /** DB column for {@code totalAmount}. */
+    public static final String COLUMN_TOTAL_AMOUNT = "total_amount";
+    public static final WormAttribute<Order, java.math.BigDecimal> totalAmount =
+        new WormAttribute<>("total_amount", java.math.BigDecimal.class);
+
+    /** DB column for {@code createdAt}. */
+    public static final String COLUMN_CREATED_AT = "created_at";
+    public static final WormAttribute<Order, java.time.Instant> createdAt =
+        new WormAttribute<>("created_at", java.time.Instant.class);
+}
+```
+
+Generated sources land in `target/generated-sources/annotations` and are compiled alongside your application code.
+
+### 26.3 Using WormAttribute in FilterBuilder
+
+Every comparison predicate in `FilterBuilder` has a typed overload accepting a `WormAttribute<E,V>`:
+
+```java
+List<Order> result = orm.findAll(Order.class, FilterBuilder.create()
+    .eq(Order_.status, "PAID")                            // String — checked at compile time
+    .gte(Order_.totalAmount, new BigDecimal("100.00"))     // BigDecimal — checked at compile time
+    .lte(Order_.createdAt, Instant.now())
+    .orderByDesc(Order_.createdAt));
+```
+
+Supported typed overloads:
+
+| Predicate | Typed signature |
+|-----------|----------------|
+| `eq` | `eq(WormAttribute<E,V> attr, V value)` |
+| `neq` | `neq(WormAttribute<E,V> attr, V value)` |
+| `gt` | `gt(WormAttribute<E,V> attr, V value)` |
+| `lt` | `lt(WormAttribute<E,V> attr, V value)` |
+| `gte` | `gte(WormAttribute<E,V> attr, V value)` |
+| `lte` | `lte(WormAttribute<E,V> attr, V value)` |
+| `like` | `like(WormAttribute<E,V> attr, V value)` |
+| `in` | `in(WormAttribute<E,V> attr, Collection<V> values)` |
+| `isNull` | `isNull(WormAttribute<E,?> attr)` |
+| `isNotNull` | `isNotNull(WormAttribute<E,?> attr)` |
+| `orderBy` | `orderBy(WormAttribute<E,?> attr)` |
+| `orderByDesc` | `orderByDesc(WormAttribute<E,?> attr)` |
+
+### 26.4 Using COLUMN_* constants in raw SQL
+
+When you only need the column name string (e.g. in a `rawWhere` call or a native `@Query`):
+
+```java
+// Raw WHERE using the string constant to avoid a hard-coded literal
+FilterBuilder.create()
+    .rawWhere(Order_.COLUMN_STATUS + " IN (?, ?)", List.of("PAID", "REFUNDED"));
+```
+
+### 26.5 Setup
+
+The processor is included in `worm-processor` and is registered via `META-INF/services/javax.annotation.processing.Processor`. It runs automatically as part of the standard Maven compile lifecycle.
+
+When consuming WORM as a library dependency, add the processor to the compiler plugin:
+
+```xml
+<plugin>
+  <groupId>org.apache.maven.plugins</groupId>
+  <artifactId>maven-compiler-plugin</artifactId>
+  <configuration>
+    <annotationProcessorPaths>
+      <path>
+        <groupId>br.com.liviacare</groupId>
+        <artifactId>worm-processor</artifactId>
+        <version>1.0.2</version>
+      </path>
+    </annotationProcessorPaths>
+  </configuration>
+</plugin>
+```
+
+### 26.6 Limitations
+
+- Only `FIELD`-level elements are inspected. Record components are picked up by the existing `WormEntityProcessor`; `WormMetamodelProcessor` currently processes regular class fields only.
+- Inner and anonymous classes are skipped.
+- Primitive types are auto-boxed in the generated `WormAttribute` (e.g. `int` → `java.lang.Integer`).
+
+---
+
+## 27. Performance guide
+
+### 27.1 Compiled Query Plan Cache
+
+Every unique query *shape* — the combination of entity class, WHERE clause template (with `?` placeholders), join set, ordering, pagination parameters, and boolean flags — is compiled into a SQL string exactly once.
+
+The result is stored in a static `ConcurrentHashMap<QueryPlanKey, String>`. Subsequent calls with the same shape return the cached string directly, skipping all `StringBuilder` allocation and logic inside `QueryBuilder`.
+
+**Practical impact:** a `Finder.all(User.class, filter)` call in a hot endpoint loop pays only the cost of parameter binding on the second and subsequent calls, not SQL generation.
+
+**Cache size** is bounded by the number of distinct query shapes in the application — typically a few dozen. To flush it (e.g. between tests), call:
+
+```java
+QueryPlanCache.clear();
+```
+
+### 27.2 Zero-allocation row mapping
+
+When `EntityMetadata` is built for a Java record, WORM pre-compiles the canonical constructor as a `MethodHandle.asSpreader(Object[].class, paramCount)`. At row-mapping time, this spreader is invoked with the `Object[]` array that the mapper already holds, without any additional copy.
+
+The original `invokeWithArguments` path (which copies the list internally) is used only as a fallback for constructors that are not compatible with the spreader (e.g. vararg constructors).
+
+This is entirely transparent — no annotation or configuration is required.
+
+### 27.3 Smart Batch-Fetch for collections (`fetchMode = BATCH`)
+
+See [Section 11.7](#117-controlling-collection-fetch-strategy-with-fetchmode) for the full explanation and decision table.
+
+Short summary: use `@DbJoin(fetchMode = FetchMode.BATCH)` when a parent entity has > 5–10 child rows on average. Below that threshold the `LEFT JOIN` + in-memory merge (default) is cheaper because it avoids a second round-trip.
+
+### 27.4 Bulk write thresholds
+
+Configure the thresholds at which WORM switches from standard JDBC batch to the driver-optimised path:
+
+```yaml
+worm:
+  bulk-copy-threshold: 20      # rows — use PostgreSQL COPY above this for inserts/upserts
+  bulk-unnest-threshold: 10    # rows — use unnest arrays above this for updates/deletes
+  batch-size: 1000             # chunk size for all batch operations
+```
+
+Lowering `bulk-copy-threshold` makes `COPY` kick in earlier (good for write-heavy pipelines). Raising it keeps standard JDBC for small writes that don't benefit from `COPY` overhead.
+
+### 27.5 Choosing the right fetch style
+
+| Scenario | Recommended approach |
+|----------|---------------------|
+| Single entity by ID | `orm.findById` / `Finder.byId` — benefits from plan cache |
+| List of entities, same filter shape repeated | `Finder.all` with a reused `FilterBuilder` shape — plan cache hit |
+| Entity with 1:1 or small 1:N joins | `@DbJoin` default (`FetchMode.JOIN`) |
+| Entity with large 1:N or N:M collections | `@DbJoin(fetchMode = FetchMode.BATCH)` |
+| Bulk insert ≥ 20 rows (PostgreSQL) | `orm.saveAllBatch` — routes to `COPY` |
+| Bulk update/delete ≥ 10 rows (PostgreSQL) | `orm.updateAllBatch` / `deleteAllBatch` — routes to unnest |
+| Insert-or-update ≥ 20 rows (PostgreSQL) | `orm.upsertAllBatch` — routes to unnest `ON CONFLICT DO UPDATE` |
+| Read-only projection of large tables | Java records as projection types — benefits from spreader mapping |
+
+---
+
+## 28. `@DbJoin` relationships with ActiveRecord
+
+This section provides a complete flow with:
+
+- related entities using `@DbJoin`;
+- new options (`localColumn`, `referencedColumn`, `targetColumn`, `mappedBy`, `fetchMode`, `on`, `type`);
+- query, `save`, `update`, and `delete` examples using the `Entity.save()` style.
+
+### 28.1 Related entity model
+
+```java
+@DbTable("departments")
+public class Department {
+    @DbId("id")
+    private UUID id;
+
+    @DbColumn("name")
+    private String name;
+}
+
+@DbTable("customers")
+public class Customer extends ActiveRecord<Customer, UUID> {
+    @DbId("id")
+    private UUID id;
+
+    @DbColumn("name")
+    private String name;
+
+    @DbColumn("department_id")
+    private UUID departmentId;
+
+    @DbColumn("manager_id")
+    private UUID managerId;
+
+    @DbColumn("external_code")
+    private String externalCode;
+
+    // 1) Convention-based join: infer table/alias/ON
+    @DbJoin
+    private Department department;
+
+    // 2) Explicit local FK column
+    @DbJoin(localColumn = "manager_id")
+    private User manager;
+
+    // 3) Join against a non-id target column
+    @DbJoin(localColumn = "external_code", targetColumn = "code")
+    private CustomerAccount account;
+
+    // 4) Equivalent variant using referencedColumn
+    @DbJoin(localColumn = "department_id", referencedColumn = "id")
+    private Department canonicalDepartment;
+
+    // 5) One-to-many with BATCH to avoid Cartesian explosion
+    @DbJoin(mappedBy = "customer_id", fetchMode = DbJoin.FetchMode.BATCH, type = DbJoin.Type.LEFT)
+    private List<Order> orders;
+
+    // 6) Full control over ON
+    @DbJoin(
+        table = "customer_flags",
+        alias = "flags",
+        type = DbJoin.Type.LEFT,
+        on = "flags.customer_id = a.id and flags.enabled = true"
+    )
+    private List<CustomerFlag> activeFlags;
+
+    @Override
+    public UUID getId() {
+        return id;
+    }
+
+    // getters/setters
+}
+```
+
+### 28.2 Queries with ActiveRecord
+
+```java
+UUID customerId = UUID.fromString("11111111-1111-1111-1111-111111111111");
+
+// Class-level gateway (recommended for querying)
+ActiveRecord.EntityOps<Customer, UUID> customers = ActiveRecord.ar(Customer.class);
+
+Optional<Customer> byId = customers.byId(customerId);
+
+List<Customer> vip = customers.all(
+    FilterBuilder.create()
+        .eq("segment", "VIP")
+        .eq("active", true)
+        .orderBy("created_at", false)
+);
+
+Slice<Customer> firstPage = customers.all(
+    FilterBuilder.create().eq("active", true),
+    Pageable.of(0, 20)
+);
+
+long totalVip = customers.count(FilterBuilder.create().eq("segment", "VIP"));
+```
+
+### 28.3 `save`, `update`, and `delete` using `Entity.save()` style
+
+```java
+Customer c = new Customer();
+c.setId(UUID.randomUUID());
+c.setName("ACME");
+c.setDepartmentId(UUID.fromString("22222222-2222-2222-2222-222222222222"));
+
+// INSERT
+c.save();
+
+// UPDATE
+c.setName("ACME Corp");
+c.update();
+
+// DELETE (hard delete or soft delete depending on metadata)
+c.delete();
+```
+
+### 28.4 Equivalent ActiveRecord static variants
+
+```java
+Customer c = new Customer();
+// ...set fields
+
+ActiveRecord.save(c);
+ActiveRecord.update(c);
+ActiveRecord.deleteById(Customer.class, c.getId());
+```
+
+### 28.5 Quick `@DbJoin` guidance
+
+- Use `@DbJoin` without `on` for standard cases with lower boilerplate.
+- For large collections (`List` / `Collection`), prefer `fetchMode = DbJoin.FetchMode.BATCH`.
+- Use `targetColumn` (or `referencedColumn`) when the relation does not target `id`.
+- Use `on` only when you need explicit SQL join logic (extra filters, functions, etc.).
 
