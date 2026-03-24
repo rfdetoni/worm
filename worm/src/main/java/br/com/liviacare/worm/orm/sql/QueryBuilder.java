@@ -422,9 +422,33 @@ public final class QueryBuilder<T> {
         String next = sql.substring(j, k).toUpperCase();
 
         Set<String> joinKeywords = Set.of("LEFT", "INNER", "RIGHT", "FULL", "CROSS", "JOIN", "WHERE", "ORDER", "GROUP", "HAVING", "LIMIT");
+        // If the token that follows the table name is a SQL keyword (no explicit alias),
+        // insert the alias. Otherwise the token is an explicit alias or 'AS' form and
+        // should be replaced with the requested alias to keep aliases consistent.
         if (next.isEmpty() || joinKeywords.contains(next)) {
             sql.insert(afterTable, " " + alias);
+            return;
         }
+
+        // Handle explicit "AS <alias>" syntax
+        if ("AS".equals(next)) {
+            int afterAs = k;
+            while (afterAs < sql.length() && Character.isWhitespace(sql.charAt(afterAs))) afterAs++;
+            if (afterAs >= sql.length()) {
+                // malformed SQL, just insert alias after table
+                sql.insert(afterTable, " " + alias);
+                return;
+            }
+            int aliasEnd = afterAs;
+            while (aliasEnd < sql.length() && !Character.isWhitespace(sql.charAt(aliasEnd))) aliasEnd++;
+            // replace existing alias after AS with the requested alias
+            sql.replace(afterAs, aliasEnd, alias);
+            return;
+        }
+
+        // Next token is an explicit alias (e.g. "FROM authors author"). Replace it
+        // with the requested alias so SELECT list and other clauses stay consistent.
+        sql.replace(j, k, alias);
     }
 
     // =========================================================================

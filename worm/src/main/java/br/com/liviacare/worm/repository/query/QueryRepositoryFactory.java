@@ -213,6 +213,14 @@ public final class QueryRepositoryFactory {
                     List<?> content = hasNext ? trimToPageSize(results, pageSize) : results;
                     return new Slice<>(content, pageable, hasNext);
                 }
+                case SCALAR -> {
+                    List<?> results = ormOperations.executeRaw(parsedSql, resultType, resolvedParameters);
+                    Object result = results.isEmpty() ? null : results.get(0);
+                    if (result == null && method.getReturnType().isPrimitive()) {
+                        throw new IllegalStateException("Query returned null but method returns primitive");
+                    }
+                    return result;
+                }
                 default -> throw new IllegalStateException("Unsupported return kind: " + returnKind);
             }
         }
@@ -268,17 +276,23 @@ public final class QueryRepositoryFactory {
     }
 
     private enum QueryReturnKind {
-        LIST, OPTIONAL, SLICE;
+        LIST, OPTIONAL, SLICE, SCALAR;
 
         private static QueryReturnKind of(Method method) {
             Class<?> raw = method.getReturnType();
             if (List.class.isAssignableFrom(raw)) return LIST;
             if (Optional.class.isAssignableFrom(raw)) return OPTIONAL;
             if (Slice.class.isAssignableFrom(raw)) return SLICE;
-            throw new IllegalArgumentException("@Query method must return Optional, List or Slice: " + method.getName());
+            if (raw == void.class) {
+                throw new IllegalArgumentException("@Query method cannot return void: " + method.getName());
+            }
+            return SCALAR;
         }
 
         private Class<?> extractResultType(Method method) {
+            if (this == SCALAR) {
+                return boxType(method.getReturnType());
+            }
             Type generic = method.getGenericReturnType();
             if (generic instanceof ParameterizedType pt) {
                 Type[] args = pt.getActualTypeArguments();
@@ -297,6 +311,19 @@ public final class QueryRepositoryFactory {
                 }
             }
             throw new IllegalArgumentException("Unable to resolve result type for method " + method.getName());
+        }
+
+        private static Class<?> boxType(Class<?> type) {
+            if (!type.isPrimitive()) return type;
+            if (type == int.class) return Integer.class;
+            if (type == long.class) return Long.class;
+            if (type == boolean.class) return Boolean.class;
+            if (type == double.class) return Double.class;
+            if (type == float.class) return Float.class;
+            if (type == short.class) return Short.class;
+            if (type == byte.class) return Byte.class;
+            if (type == char.class) return Character.class;
+            return type;
         }
     }
 
@@ -334,5 +361,3 @@ public final class QueryRepositoryFactory {
         }
     }
 }
-
-

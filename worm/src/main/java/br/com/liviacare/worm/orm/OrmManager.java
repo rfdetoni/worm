@@ -348,7 +348,7 @@ public class OrmManager implements OrmOperations {
                         }
                         softDelete(metadata, id);
                     } else {
-                        hardDelete(metadata, id);
+                        executeHardDelete(metadata, id);
                     }
                 } catch (OrmOperationException e) {
                     throw e;
@@ -366,7 +366,7 @@ public class OrmManager implements OrmOperations {
             if (metadata.softDeleteSql() != null) {
                 softDelete(metadata, id);
             } else {
-                hardDelete(metadata, id);
+                executeHardDelete(metadata, id);
             }
         }));
     }
@@ -374,6 +374,68 @@ public class OrmManager implements OrmOperations {
     public <T> int[] deleteAll(List<T> entities) {
         if (entities == null || entities.isEmpty()) return new int[0];
         return deleteAllBatch(entities);
+    }
+
+    public <T> void hardDelete(T entity) {
+        final EntityMetadata<T> metadata = getRequiredMetadata((Class<T>) entity.getClass());
+        withModuleVoid(metadata, () -> {
+            execWrite(() -> {
+                try {
+                    final Object id = metadata.idGetter().invoke(entity);
+                    executeHardDelete(metadata, id);
+                } catch (OrmOperationException e) {
+                    throw e;
+                } catch (Throwable e) {
+                    throw new OrmOperationException("Failed to hard delete entity: " + entity, e);
+                }
+            });
+            clearSnapshot(entity, metadata);
+        });
+    }
+
+    public <T, I> void hardDeleteById(Class<T> clazz, I id) {
+        final EntityMetadata<T> metadata = getRequiredMetadata(clazz);
+        withModuleVoid(metadata, () -> execWrite(() -> executeHardDelete(metadata, id)));
+    }
+
+    public <T> int[] hardDeleteAll(List<T> entities) {
+        if (entities == null || entities.isEmpty()) return new int[0];
+        return hardDeleteAllBatch(entities);
+    }
+
+    public <T> int[] hardDeleteAllBatch(List<T> entities) {
+        if (entities == null || entities.isEmpty()) return new int[0];
+        final EntityMetadata<T> meta = getRequiredMetadata((Class<T>) entities.get(0).getClass());
+        return withModule(meta, () -> {
+            if (bulkWriter != null && meta.softDeleteSql() == null) {
+                int[] unnestResult = bulkWriter.bulkDelete(entities, meta);
+                if (unnestResult != null) {
+                    for (T entity : entities) {
+                        clearSnapshot(entity, meta);
+                    }
+                    return unnestResult;
+                }
+            }
+            // Fallback: batchUpdate dentro de transação única
+            int[] results = execWrite(() -> {
+                final String sql = resolveDeleteSql(meta);
+                final String entityName = meta.entityClass().getSimpleName();
+                final List<Object[]> params = new ArrayList<>(entities.size());
+                for (T e : entities) {
+                    Object id = validateIdIsPresent(e, meta, "hardDeleteAll");
+                    params.add(new Object[]{id});
+                }
+                if (ormLogger.isDebugEnabled()) {
+                    return ormLogger.logBatchAndExecute(SqlConstants.OP_DELETE_BATCH, sql, params,
+                            () -> executeBatchInChunks(sql, params, entityName));
+                }
+                return executeBatchInChunks(sql, params, entityName);
+            });
+            for (T entity : entities) {
+                clearSnapshot(entity, meta);
+            }
+            return results;
+        });
     }
 
     public <T> int[] upsertAll(List<T> entities) {
@@ -1127,7 +1189,7 @@ public class OrmManager implements OrmOperations {
         SessionSnapshotContext.remove(entity);
     }
 
-    private <T, I> void hardDelete(EntityMetadata<T> metadata, I id) {
+    private <T, I> void executeHardDelete(EntityMetadata<T> metadata, I id) {
         final String sql = resolveDeleteSql(metadata);
         final List<Object> params = List.of(id);
         if (ormLogger.isDebugEnabled()) {

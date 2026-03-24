@@ -39,6 +39,14 @@ public interface OrmOperations {
 
     <T> int[] deleteAllBatch(List<T> entities);
 
+    <T> void hardDelete(T entity);
+
+    <T, I> void hardDeleteById(Class<T> clazz, I id);
+
+    <T> int[] hardDeleteAll(List<T> entities);
+
+    <T> int[] hardDeleteAllBatch(List<T> entities);
+
     <T> int[] upsertAll(List<T> entities);
 
     <T> int[] upsertAllBatch(List<T> entities);
@@ -110,4 +118,3 @@ public interface OrmOperations {
     /** Exposes the underlying {@link JdbcClient} for advanced use cases. */
     JdbcClient client();
 }
-

@@ -91,7 +91,15 @@ public class OrmAutoConfiguration {
         if (hikari.getDataSourceProperties().containsKey(key)) {
             return;
         }
-        hikari.addDataSourceProperty(key, value);
+        try {
+            hikari.addDataSourceProperty(key, value);
+        } catch (IllegalStateException ex) {
+            // Hikari seals its configuration once the pool is started. If we reach here,
+            // it means the DataSource was already initialized elsewhere. Best effort:
+            // don't fail application startup for a non-critical performance tweak.
+            // The driver/property may already be set, or cannot be changed at runtime.
+            // Ignore the exception and proceed.
+        }
     }
 
     @EventListener(ApplicationReadyEvent.class)
