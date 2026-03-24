@@ -7,11 +7,12 @@
     <parent>
         <groupId>br.com.liviacare</groupId>
         <artifactId>worm-parent</artifactId>
-        <version>1.0.3</version>
+        <version>1.0.4</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <artifactId>worm</artifactId>
+    <version>1.0.4</version>
     <packaging>jar</packaging>
     <name>WORM ORM</name>
     <description>A lightweight, zero-dependency ORM for Java with Spring Boot support</description>

@@ -10,7 +10,7 @@
     </parent>
     <groupId>br.com.liviacare</groupId>
     <artifactId>worm-parent</artifactId>
-    <version>1.0.3</version>
+    <version>1.0.4</version>
     <packaging>pom</packaging>
     <name>WORM Parent</name>
     <description>Parent POM for WORM multi-module build</description>
