@@ -1,0 +1,4 @@
+br.com.liviacare.worm.processor.WormEntityProcessor
+br.com.liviacare.worm.processor.WormQueryRepositoryProcessor
+br.com.liviacare.worm.processor.WormMetamodelProcessor
+
