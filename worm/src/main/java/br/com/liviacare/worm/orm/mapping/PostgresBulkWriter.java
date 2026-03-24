@@ -432,4 +432,3 @@ public final class PostgresBulkWriter implements BulkWriter {
         return val;
     }
 }
-

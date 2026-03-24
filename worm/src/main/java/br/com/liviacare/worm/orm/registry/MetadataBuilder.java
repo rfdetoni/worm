@@ -1,5 +1,6 @@
 package br.com.liviacare.worm.orm.registry;
 
+import br.com.liviacare.worm.ActiveRecord;
 import br.com.liviacare.worm.annotation.audit.*;
 import br.com.liviacare.worm.annotation.mapping.*;
 import br.com.liviacare.worm.api.iBaseEntity;
@@ -119,6 +120,16 @@ final class MetadataBuilder<T> {
         String  annotatedValue = hasDbCol ? dbColAnn.value() : null;
         String  annotatedExpr  = hasDbCol ? dbColAnn.expr()  : null;
 
+        // If this entity is an ActiveRecord subclass, skip object-typed (non-scalar) components
+        // unless they're explicitly stored as JSON columns or are the ID field. This avoids
+        // generating SELECT/param entries for nested objects that would break SQL generation.
+        if (ActiveRecord.class.isAssignableFrom(entityClass)
+                && isJsonCandidate(comp.getType())
+                && (dbColAnn == null || !dbColAnn.json())
+                && !comp.isAnnotationPresent(DbId.class)) {
+            return;
+        }
+
         if (hasDbCol && annotatedExpr != null && !annotatedExpr.isBlank()) {
             String alias = (annotatedValue != null && !annotatedValue.isBlank()) ? annotatedValue : comp.getName();
             validateExprAlias(comp.getName(), alias);
@@ -133,7 +144,7 @@ final class MetadataBuilder<T> {
             addRegularParam(col, comp.getType(), comp.getGenericType(), null);
             insertable.add(col);
             if (!comp.isAnnotationPresent(DbId.class) && !isAuditing(comp)) updatable.add(col);
-            
+
             if (comp.isAnnotationPresent(DbId.class)) {
                 this.idColumnName = col;
                 this.idGetterHandle = privateLookup.unreflect(comp.getAccessor());
@@ -174,14 +185,21 @@ final class MetadataBuilder<T> {
 
     private void processRegularField(Field f) throws IllegalAccessException {
         f.setAccessible(true);
-        String col = resolveColumnName(f);
         DbColumn dbColAnn = f.getAnnotation(DbColumn.class);
+        if (ActiveRecord.class.isAssignableFrom(entityClass)
+                && isJsonCandidate(f.getType())
+                && (dbColAnn == null || !dbColAnn.json())
+                && !f.isAnnotationPresent(DbId.class)) {
+            return;
+        }
+
+        String col = resolveColumnName(f);
         addSelectEntry(mainAlias + "." + col + " AS " + col, col, f.getType(),
                 privateLookup.unreflectGetter(f), privateLookup.unreflectSetter(f));
         addRegularParam(col, f.getType(), f.getGenericType(), privateLookup.unreflectSetter(f));
         insertable.add(col);
         if (!f.isAnnotationPresent(DbId.class) && !isAuditing(f)) updatable.add(col);
-        
+
         if (f.isAnnotationPresent(DbId.class)) {
             this.idColumnName = col;
             this.idGetterHandle = privateLookup.unreflectGetter(f);
@@ -365,7 +383,11 @@ final class MetadataBuilder<T> {
         Class<?> current = clazz;
         while (current != null && current != Object.class) {
             for (Field f : current.getDeclaredFields()) {
-                if (Modifier.isStatic(f.getModifiers())) continue;
+                int mods = f.getModifiers();
+                if (Modifier.isStatic(mods)) continue;
+                if (f.getDeclaringClass() == br.com.liviacare.worm.ActiveRecord.class) continue;
+                if ((Modifier.isTransient(mods) || Modifier.isFinal(mods))
+                        && Arrays.stream(f.getAnnotations()).noneMatch(a -> a.annotationType().getName().startsWith("br.com.liviacare.worm.annotation."))) continue;
                 fields.putIfAbsent(f.getName(), f);
             }
             current = current.getSuperclass();
@@ -757,6 +779,8 @@ final class MetadataBuilder<T> {
     }
 
     private WritePlan createWritePlan(String sql, WritePlan.Slot[] slots, MethodHandle hookHandle, boolean hasVersion) {
+        if (sql == null || sql.isBlank()) return null;
+
         if (dialect != null) {
             ParamBinder binder = dialect.createParamBinder(entityClass, sql, slots, hasVersion);
             if (binder != null) {
@@ -784,6 +808,8 @@ final class MetadataBuilder<T> {
     }
 
     private static boolean isJsonCandidate(Class<?> t) {
+        if (t == null) return false;
+        if (t == Object.class || "java.lang.Object".equals(t.getName())) return true;
         return List.class.isAssignableFrom(t)
                 || Map.class.isAssignableFrom(t)
                 || (!t.isPrimitive() && !t.isEnum()
@@ -807,26 +833,17 @@ final class MetadataBuilder<T> {
     }
 
     private String buildUpdateSql(Optional<String> versionCol, List<String> updatableCols) {
-        String base = SqlConstants.UPDATE + tableName + SqlConstants.SET
-                + updatableCols.stream().map(c -> c + " = " + SqlConstants.PLACEHOLDER).collect(Collectors.joining(SqlConstants.COMMA_SPACE));
-        if (versionCol.isPresent()) {
-            String vc = versionCol.get();
-            return base + SqlConstants.COMMA_SPACE + vc + " = " + vc + " + 1"
-                    + SqlConstants.WHERE + idColumnName + " = " + SqlConstants.PLACEHOLDER
-                    + SqlConstants.AND   + vc           + " = " + SqlConstants.PLACEHOLDER;
-        }
-        return base + SqlConstants.WHERE + idColumnName + " = " + SqlConstants.PLACEHOLDER;
-    }
+        if (updatableCols == null || updatableCols.isEmpty()) return null;
 
-    private String buildSoftDeleteSql(boolean hasActive, String activeCol,
-                                      boolean hasDeletedAt, String deletedAtCol) {
-        if (hasActive)
-            return SqlConstants.UPDATE + tableName + SqlConstants.SET + activeCol + " = false"
-                    + SqlConstants.WHERE + idColumnName + " = " + SqlConstants.PLACEHOLDER;
-        if (hasDeletedAt)
-            return SqlConstants.UPDATE + tableName + SqlConstants.SET + deletedAtCol + " = " + SqlConstants.PLACEHOLDER
-                    + SqlConstants.WHERE + idColumnName + " = " + SqlConstants.PLACEHOLDER;
-        return null;
+        String setClause = updatableCols.stream()
+                .map(c -> c + " = " + SqlConstants.PLACEHOLDER)
+                .collect(Collectors.joining(SqlConstants.COMMA_SPACE));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(SqlConstants.UPDATE).append(tableName).append(SqlConstants.SET).append(setClause);
+        sb.append(SqlConstants.WHERE).append(idColumnName).append(" = ").append(SqlConstants.PLACEHOLDER);
+        versionCol.ifPresent(vc -> sb.append(" AND ").append(vc).append(" = ").append(SqlConstants.PLACEHOLDER));
+        return sb.toString();
     }
 
     private List<String> buildJoinClauses() {
@@ -835,6 +852,20 @@ final class MetadataBuilder<T> {
                 .map(ji -> " " + ji.type.name() + " JOIN " + ji.table + " " + ji.alias + " ON " + ji.on)
                 .distinct()
                 .collect(Collectors.toList());
+    }
+
+    private String buildSoftDeleteSql(boolean hasActive, String activeCol, boolean hasDeletedAt, String deletedAtCol) {
+        if (hasActive && activeCol != null && !activeCol.isBlank()) {
+            // Prefer toggling 'active' boolean to false when available
+            return SqlConstants.UPDATE + tableName + SqlConstants.SET + activeCol + " = false"
+                    + SqlConstants.WHERE + idColumnName + " = " + SqlConstants.PLACEHOLDER;
+        }
+        if (hasDeletedAt && deletedAtCol != null && !deletedAtCol.isBlank()) {
+            // Set deleted_at to placeholder (caller will bind timestamp)
+            return SqlConstants.UPDATE + tableName + SqlConstants.SET + deletedAtCol + " = " + SqlConstants.PLACEHOLDER
+                    + SqlConstants.WHERE + idColumnName + " = " + SqlConstants.PLACEHOLDER;
+        }
+        return null;
     }
 
     private String resolveOrderBy() {

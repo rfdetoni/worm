@@ -5,21 +5,9 @@ import br.com.liviacare.worm.annotation.query.Query;
 import br.com.liviacare.worm.annotation.query.QueryParam;
 import br.com.liviacare.worm.annotation.query.QueryRepository;
 
-import javax.annotation.processing.AbstractProcessor;
-import javax.annotation.processing.Filer;
-import javax.annotation.processing.Messager;
-import javax.annotation.processing.ProcessingEnvironment;
-import javax.annotation.processing.RoundEnvironment;
-import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
+import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
-import javax.lang.model.element.Element;
-import javax.lang.model.element.ElementKind;
-import javax.lang.model.element.ExecutableElement;
-import javax.lang.model.element.Modifier;
-import javax.lang.model.element.PackageElement;
-import javax.lang.model.element.TypeElement;
-import javax.lang.model.element.VariableElement;
+import javax.lang.model.element.*;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
@@ -28,12 +16,7 @@ import javax.tools.JavaFileObject;
 import javax.tools.StandardLocation;
 import java.io.IOException;
 import java.io.Writer;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Generates concrete query repository implementations for interfaces annotated with @QueryRepository.
@@ -211,6 +194,19 @@ public final class WormQueryRepositoryProcessor extends AbstractProcessor {
             writer.write("                new Object[]{" + parameterArray(plan.parameterIndexes) + "}\n");
             writer.write("        );\n");
             writer.write("        return results.isEmpty() ? Optional.empty() : Optional.ofNullable(results.get(0));\n");
+        } else if (plan.returnKind == QueryReturnKindModel.SCALAR) {
+            String boxClass = boxTypeStr(plan.resultType);
+            writer.write("        List<" + boxClass + "> results = ormOperations.executeRaw(\n");
+            writer.write("                \"" + escapeJava(plan.sql) + "\",\n");
+            writer.write("                " + boxClass + ".class,\n");
+            writer.write("                new Object[]{" + parameterArray(plan.parameterIndexes) + "}\n");
+            writer.write("        );\n");
+            if (isPrimitiveStr(plan.resultType)) {
+                writer.write("        if (results.isEmpty() || results.get(0) == null) throw new IllegalStateException(\"Query returned null but method returns primitive " + plan.resultType + "\");\n");
+                writer.write("        return results.get(0);\n");
+            } else {
+                writer.write("        return results.isEmpty() ? null : results.get(0);\n");
+            }
         } else {
             writer.write("        return ormOperations.executeRaw(\n");
             writer.write("                \"" + escapeJava(plan.sql) + "\",\n");
@@ -219,6 +215,27 @@ public final class WormQueryRepositoryProcessor extends AbstractProcessor {
             writer.write("        );\n");
         }
         writer.write("    }\n\n");
+    }
+
+    private static boolean isPrimitiveStr(String type) {
+        return switch (type) {
+            case "boolean", "byte", "short", "int", "long", "char", "float", "double" -> true;
+            default -> false;
+        };
+    }
+
+    private static String boxTypeStr(String type) {
+        return switch (type) {
+            case "boolean" -> "Boolean";
+            case "byte" -> "Byte";
+            case "short" -> "Short";
+            case "int" -> "Integer";
+            case "long" -> "Long";
+            case "char" -> "Character";
+            case "float" -> "Float";
+            case "double" -> "Double";
+            default -> type;
+        };
     }
 
     private QueryPlan analyzeMethod(ExecutableElement method) {
@@ -291,6 +308,9 @@ public final class WormQueryRepositoryProcessor extends AbstractProcessor {
     }
 
     private static String extractResultType(ExecutableElement method, QueryReturnKindModel kind) {
+        if (kind == QueryReturnKindModel.SCALAR) {
+            return method.getReturnType().toString();
+        }
         TypeMirror returnType = method.getReturnType();
         if (!(returnType instanceof DeclaredType declaredType) || declaredType.getTypeArguments().isEmpty()) {
             throw new IllegalStateException("Unable to resolve result type for method " + method.getSimpleName());
@@ -321,14 +341,16 @@ public final class WormQueryRepositoryProcessor extends AbstractProcessor {
     private enum QueryReturnKindModel {
         LIST,
         OPTIONAL,
-        SLICE;
+        SLICE,
+        SCALAR;
 
         static QueryReturnKindModel of(ExecutableElement method) {
             String raw = method.getReturnType().toString();
             if (raw.startsWith("java.util.List<")) return LIST;
             if (raw.startsWith("java.util.Optional<")) return OPTIONAL;
             if (raw.startsWith("br.com.liviacare.worm.query.Slice<")) return SLICE;
-            throw new IllegalStateException("@Query method must return Optional, List or Slice: " + method.getSimpleName());
+            if ("void".equals(raw)) throw new IllegalStateException("@Query method cannot return void: " + method.getSimpleName());
+            return SCALAR;
         }
     }
 
@@ -345,4 +367,3 @@ public final class WormQueryRepositoryProcessor extends AbstractProcessor {
         return qualified.substring(packageName.length() + 1);
     }
 }
-
