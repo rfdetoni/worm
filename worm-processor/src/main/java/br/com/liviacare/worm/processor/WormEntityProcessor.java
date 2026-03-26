@@ -475,7 +475,8 @@ public final class WormEntityProcessor extends AbstractProcessor {
 
     private List<JoinDescriptorModel> collectToOneJoinDescriptors(TypeElement entityType) {
         List<JoinDescriptorModel> joins = new ArrayList<>();
-        String mainAlias = AliasUtils.defaultMainAlias(entityType.getSimpleName().toString());
+        String tableName = resolveEntityTableName(entityType);
+        String mainAlias = AliasUtils.defaultMainAlias(tableName);
         for (Element enclosed : entityType.getEnclosedElements()) {
             if (!(enclosed instanceof VariableElement field)) {
                 continue;
@@ -490,12 +491,20 @@ public final class WormEntityProcessor extends AbstractProcessor {
             }
             String relationName = field.getSimpleName().toString();
             String table = resolveJoinTable(join, joinType);
-            String alias = join.alias().isBlank() ? AliasUtils.defaultJoinAlias(relationName, table) : AliasUtils.sanitizeAlias(join.alias());
+            String alias = join.alias().isBlank() ? AliasUtils.defaultJoinAlias(table) : AliasUtils.sanitizeAlias(join.alias());
             String on = resolveJoinOn(entityType, field, join, joinType, alias, relationName, mainAlias);
             joins.add(new JoinDescriptorModel(relationName, joinType.getQualifiedName().toString(), table, alias, on, join.type().name()));
         }
         return joins;
     }
+
+            private static String resolveEntityTableName(TypeElement entityType) {
+                DbTable dbTable = entityType.getAnnotation(DbTable.class);
+                if (dbTable != null && !dbTable.value().isBlank()) {
+                    return dbTable.value();
+                }
+                return entityType.getSimpleName().toString().toLowerCase();
+            }
 
     private static boolean isCollectionField(VariableElement field) {
         return field.asType().toString().startsWith("java.util.List<")

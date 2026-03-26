@@ -1,5 +1,7 @@
 package br.com.liviacare.worm.util;
 
+import br.com.liviacare.worm.annotation.mapping.DbTable;
+
 import java.util.Set;
 
 /**
@@ -10,23 +12,54 @@ public final class AliasUtils {
     private AliasUtils() {
     }
 
+    /**
+     * Deprecated. Prefer the string-based overloads that accept a table name.
+     * This wrapper is kept for binary compatibility and delegates to
+     * {@link #defaultMainAlias(String)} after resolving a table name from
+     * {@link #entityTableName(Class)}.
+     */
+    @Deprecated
     public static String defaultMainAlias(Class<?> entityClass) {
-        if (entityClass == null || entityClass.getSimpleName().isBlank()) return "entity";
-        return decapitalize(entityClass.getSimpleName());
+        if (entityClass == null) return "entity";
+        return defaultMainAlias(entityTableName(entityClass));
     }
+
+    // Cache of normalized table/name -> alias to avoid repeated allocations and
+    // reflection hotspots in hot paths (query building / metadata creation).
+    private static final java.util.concurrent.ConcurrentHashMap<String, String> ALIAS_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
     public static String defaultMainAlias(String tableOrName) {
         String base = normalizeBaseName(tableOrName);
-        String camel = toCamelCase(base);
-        return camel.isBlank() ? "entity" : camel;
+        if (base.isBlank()) return "entity";
+        return ALIAS_CACHE.computeIfAbsent(base, k -> {
+            String sanitized = sanitizeAlias(k);
+            return sanitized.isBlank() ? "entity" : sanitized;
+        });
+    }
+
+    /**
+     * Helper to resolve an entity class to its DB table name.
+     * If the class carries {@link DbTable} with a non-blank value, that value is returned,
+     * otherwise the simple class name lowercased is returned.
+     */
+    public static String entityTableName(Class<?> entityClass) {
+        if (entityClass == null) return "";
+        DbTable ann = entityClass.getAnnotation(DbTable.class);
+        if (ann != null && ann.value() != null && !ann.value().isBlank()) return ann.value();
+        return entityClass.getSimpleName().toLowerCase();
     }
 
     public static String defaultJoinAlias(String relationName, String tableOrName) {
-        if (relationName != null && !relationName.isBlank()) {
-            String candidate = toCamelCase(relationName.trim());
-            if (!candidate.isBlank()) return candidate;
-        }
+        // Join aliases are derived from the join table only. Relation-based aliases
+        // are no longer used to avoid coupling SQL aliasing to Java names.
         return defaultMainAlias(tableOrName);
+    }
+
+    /**
+     * Convenience overload: derive a join alias directly from the join table name.
+     */
+    public static String defaultJoinAlias(String tableName) {
+        return defaultMainAlias(tableName);
     }
 
     public static String ensureUniqueAlias(String baseAlias, Set<String> usedAliasesLowerCase) {
@@ -47,8 +80,28 @@ public final class AliasUtils {
         if (alias == null) return "";
         String a = alias.trim();
         if (a.isEmpty()) return "";
-        a = a.replace('.', '_').replace('-', '_').replace(' ', '_');
-        return toCamelCase(a);
+        // Fast manual normalization: keep letters/digits, convert separators to '_', then
+        // convert snake/sep style to camelCase-like alias (lower_first, remove separators).
+        StringBuilder sb = new StringBuilder(a.length());
+        boolean upperNext = false;
+        for (int i = 0; i < a.length(); i++) {
+            char c = a.charAt(i);
+            if (c == '.' || c == '-' || c == ' ' || c == '_') {
+                upperNext = sb.length() > 0; // only uppercase if we already have a char
+                continue;
+            }
+            if (Character.isLetterOrDigit(c)) {
+                if (upperNext) {
+                    sb.append(Character.toUpperCase(c));
+                    upperNext = false;
+                } else {
+                    sb.append(Character.toLowerCase(c));
+                }
+            }
+        }
+        if (sb.length() == 0) return "";
+        sb.setCharAt(0, Character.toLowerCase(sb.charAt(0)));
+        return sb.toString();
     }
 
     private static String normalizeBaseName(String value) {
@@ -61,16 +114,8 @@ public final class AliasUtils {
 
     private static String toCamelCase(String value) {
         if (value == null || value.isBlank()) return "";
-        String[] parts = value.split("[_\\-\\s]+");
-        if (parts.length == 0) return "";
-
-        StringBuilder out = new StringBuilder(parts[0].toLowerCase());
-        for (int i = 1; i < parts.length; i++) {
-            if (parts[i].isBlank()) continue;
-            String p = parts[i].toLowerCase();
-            out.append(Character.toUpperCase(p.charAt(0))).append(p.substring(1));
-        }
-        return out.toString();
+        // Fallback: reuse sanitizeAlias behavior to produce a camel-like form
+        return sanitizeAlias(value);
     }
 
     private static String decapitalize(String value) {

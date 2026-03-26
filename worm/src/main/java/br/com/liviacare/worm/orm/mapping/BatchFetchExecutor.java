@@ -176,7 +176,11 @@ public final class BatchFetchExecutor {
         EntityMetadata<?> childMeta = EntityRegistry.getMetadata(ji.getJoinClass());
 
         List<Object> allChildren = new ArrayList<>();
-        String childAlias = ji.getAlias() != null ? ji.getAlias() : AliasUtils.defaultMainAlias(ji.getJoinClass());
+        String childAlias = ji.getAlias() != null && !ji.getAlias().isBlank()
+                ? ji.getAlias()
+                : (ji.getTable() != null && !ji.getTable().isBlank()
+                    ? AliasUtils.defaultMainAlias(ji.getTable())
+                    : AliasUtils.defaultMainAlias(AliasUtils.entityTableName(ji.getJoinClass())));
 
         // Chunk parent IDs to avoid overly large IN clauses
         int total = parentIds.size();

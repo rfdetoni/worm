@@ -1,11 +1,11 @@
 package br.com.liviacare.worm.orm.registry;
 
-import br.com.liviacare.worm.api.iBaseEntity;
 import br.com.liviacare.worm.annotation.audit.*;
 import br.com.liviacare.worm.annotation.mapping.DbColumn;
 import br.com.liviacare.worm.annotation.mapping.DbId;
 import br.com.liviacare.worm.annotation.mapping.DbTable;
 import br.com.liviacare.worm.annotation.mapping.DbVersion;
+import br.com.liviacare.worm.api.iBaseEntity;
 import br.com.liviacare.worm.orm.converter.ConverterRegistry;
 import br.com.liviacare.worm.orm.dialect.SqlDialect;
 import br.com.liviacare.worm.orm.mapping.EntityBinder;
@@ -332,11 +332,13 @@ class GeneratedMetadataLookupTest {
         }
         assertNotNull(join);
         assertEquals("departments", join.getTable());
-        assertEquals("department", join.getAlias());
-        assertEquals("department.id = aptUserWithDepartment.department_id", join.getOn());
-        assertTrue(metadata.selectSql().contains("FROM apt_join_users aptUserWithDepartment INNER JOIN departments department ON department.id = aptUserWithDepartment.department_id"));
-        assertTrue(metadata.selectSql().contains("department.id AS department_id"));
-        assertTrue(metadata.selectSql().contains("department.code AS department_code"));
+        assertEquals("departments", join.getAlias());
+        assertEquals("departments.id = aptJoinUsers.department_id", join.getOn());
+        // debug prints removed
+        // main alias is derived from table name (apt_join_users -> aptJoinUsers)
+        assertTrue(metadata.selectSql().contains("FROM apt_join_users aptJoinUsers INNER JOIN departments departments ON departments.id = aptJoinUsers.department_id"));
+        assertTrue(metadata.selectSql().contains("departments.id AS departments_id"));
+        assertTrue(metadata.selectSql().contains("departments.code AS departments_code"));
     }
 
     @Test
