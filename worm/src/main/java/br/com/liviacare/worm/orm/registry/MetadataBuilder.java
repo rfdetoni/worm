@@ -461,7 +461,6 @@ final class MetadataBuilder<T> {
 
         String referencedColumn = resolveReferencedColumn(ann);
         if (!ann.localColumn().isBlank()) {
-            validateMainEntityColumn(ann.localColumn(), relationName, "localColumn");
             validateJoinColumn(ji, referencedColumn, relationName, "referencedColumn/targetColumn");
             return alias + "." + referencedColumn + " = " + mainAlias + "." + ann.localColumn();
         }
@@ -506,33 +505,11 @@ final class MetadataBuilder<T> {
         return candidates.size() == 1 ? candidates.get(0) : null;
     }
 
-    private void validateMainEntityColumn(String column, String relationName, String attribute) {
-        if (hasMainEntityColumn(column)) return;
-        throw new RuntimeException("@DbJoin(" + attribute + ") on relation '" + relationName + "' in "
-                + entityClass.getName() + " references unknown main-entity column '" + column + "'");
-    }
-
     private void validateJoinColumn(JoinInfo ji, String column, String relationName, String attribute) {
         if (ji.joinColumnNames.contains(column)) return;
         throw new RuntimeException("@DbJoin(" + attribute + ") on relation '" + relationName + "' in "
                 + entityClass.getName() + " references unknown join column '" + column + "' from "
                 + ji.joinClass.getName());
-    }
-
-    private boolean hasMainEntityColumn(String column) {
-        if (column == null || column.isBlank()) return false;
-        if (isRecord) {
-            for (RecordComponent comp : entityClass.getRecordComponents()) {
-                if (comp.isAnnotationPresent(DbJoin.class)) continue;
-                if (column.equals(resolveColumnName(comp))) return true;
-            }
-            return false;
-        }
-        for (Field field : getAllFields(entityClass)) {
-            if (field.isAnnotationPresent(DbJoin.class)) continue;
-            if (column.equals(resolveColumnName(field))) return true;
-        }
-        return false;
     }
 
     private String idColumnOrDefault() {

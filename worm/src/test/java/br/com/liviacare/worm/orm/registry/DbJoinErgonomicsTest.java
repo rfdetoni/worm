@@ -91,11 +91,11 @@ class DbJoinErgonomicsTest {
     }
 
     @DbTable("users")
-    static class UserWithInvalidLocalColumn {
+    static class UserWithUnmappedLocalColumn {
         @DbId("id")
         private Long id;
 
-        @DbJoin(localColumn = "does_not_exist")
+        @DbJoin(localColumn = "manager_id")
         private Department department;
     }
 
@@ -167,11 +167,12 @@ class DbJoinErgonomicsTest {
     }
 
     @Test
-    void failFastWhenLocalColumnDoesNotExist() {
-        RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> EntityMetadata.of(UserWithInvalidLocalColumn.class));
+    void allowUnmappedLocalColumnForJoinOn() {
+        EntityMetadata<UserWithUnmappedLocalColumn> metadata = EntityMetadata.of(UserWithUnmappedLocalColumn.class);
+        JoinInfo join = firstJoin(metadata);
 
-        assertTrue(ex.getMessage().contains("does_not_exist"));
+        assertEquals("departments.id = users.manager_id", join.getOn());
+        assertFalse(metadata.selectSql().contains(" AS manager_id"));
     }
 
     @Test
@@ -197,4 +198,3 @@ class DbJoinErgonomicsTest {
         throw new AssertionError("No join metadata found");
     }
 }
-
