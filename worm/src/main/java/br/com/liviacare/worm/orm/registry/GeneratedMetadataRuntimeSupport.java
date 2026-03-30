@@ -230,9 +230,41 @@ public final class GeneratedMetadataRuntimeSupport {
                 }
             }
 
-            String mainAlias = joins.length == 0 ? null : AliasUtils.defaultMainAlias(entityClass);
+            String mainAlias;
+            if (joins.length == 0) {
+                mainAlias = null;
+            } else {
+                if (tableName != null) mainAlias = AliasUtils.defaultMainAlias(tableName);
+                else mainAlias = AliasUtils.defaultMainAlias(AliasUtils.entityTableName(entityClass));
+            }
+
+            // Normalize JoinDescriptor ON clauses: replace references to the generated
+            // entity class alias (e.g. MyEntity) with the table-derived mainAlias so
+            // hand-written generated JoinDescriptor.on strings remain valid.
+            GeneratedMetadataRuntimeSupport.JoinDescriptor[] normalizedJoins = new GeneratedMetadataRuntimeSupport.JoinDescriptor[joins.length];
+            String entitySimple = entityClass.getSimpleName();
+            String entityDecap = Character.toLowerCase(entitySimple.charAt(0)) + entitySimple.substring(1);
             for (int i = 0; i < joins.length; i++) {
-                JoinDescriptor jd = joins[i];
+                GeneratedMetadataRuntimeSupport.JoinDescriptor jd = joins[i];
+                String on = jd.on();
+                if (on != null && mainAlias != null) {
+                    // Replace both capitalized and decapitalized occurrences of the entity class token
+                    on = on.replace(entitySimple + ".", mainAlias + ".");
+                    on = on.replace(entityDecap + ".", mainAlias + ".");
+                }
+                // Enforce table-derived alias for join descriptors so generated factories
+                // using relation/class-based aliases are normalized to the table name.
+                String normAlias = AliasUtils.defaultMainAlias(jd.table());
+                // Also replace any occurrences of the original join alias (e.g. "department.")
+                // with the normalized table-derived alias to keep the ON clause consistent.
+                if (on != null && jd.alias() != null && !jd.alias().isBlank()) {
+                    on = on.replace(jd.alias() + ".", normAlias + ".");
+                }
+                normalizedJoins[i] = new GeneratedMetadataRuntimeSupport.JoinDescriptor(
+                        jd.fieldName(), jd.joinClass(), jd.table(), normAlias, on, jd.type());
+            }
+            for (int i = 0; i < normalizedJoins.length; i++) {
+                JoinDescriptor jd = normalizedJoins[i];
                 int paramIndex = scalarCount + i;
                 JoinInfo joinInfo = inspectJoin(jd, lookup);
                 joinInfos[paramIndex] = joinInfo;
@@ -306,7 +338,7 @@ public final class GeneratedMetadataRuntimeSupport {
             b.insertWritePlan = insertWritePlan;
             b.updateWritePlan = updateWritePlan;
             b.binder = findBinderForEntity(entityClass);
-            b.selectSql = buildSelectSql(tableName, descriptors, joins, mainAlias);
+            b.selectSql = buildSelectSql(tableName, descriptors, normalizedJoins, mainAlias);
             b.countSql = "SELECT COUNT(*) FROM " + tableName;
             b.insertSql = buildInsertSql(tableName, insertableColumns);
             b.updateSql = buildUpdateSql(tableName, idColumn, updatableColumns, options.versionColumn());
@@ -429,11 +461,21 @@ public final class GeneratedMetadataRuntimeSupport {
 
     private static JoinInfo inspectJoinColumns(Class<?> joinClass) {
         try {
-            return inspectJoin(new JoinDescriptor("", joinClass, "", AliasUtils.defaultMainAlias(joinClass), "", br.com.liviacare.worm.annotation.mapping.DbJoin.Type.INNER), MethodHandles.lookup());
+            // Prefer table-based aliasing. If the joinClass carries @DbTable use it,
+            // otherwise fall back to the simpleName lowercased. Cache results to avoid repeated annotation reads.
+            String table = JOIN_TABLE_CACHE.computeIfAbsent(joinClass, jc -> {
+                var dbTable = jc.getAnnotation(br.com.liviacare.worm.annotation.mapping.DbTable.class);
+                if (dbTable != null && !dbTable.value().isBlank()) return dbTable.value();
+                return jc.getSimpleName().toLowerCase();
+            });
+            return inspectJoin(new JoinDescriptor("", joinClass, table, AliasUtils.defaultMainAlias(table), "", br.com.liviacare.worm.annotation.mapping.DbJoin.Type.INNER), MethodHandles.lookup());
         } catch (Exception e) {
             throw new RuntimeException("Failed to inspect generated join columns for " + joinClass.getName(), e);
         }
     }
+
+    // Small cache for joinClass -> resolved table name
+    private static final java.util.concurrent.ConcurrentHashMap<Class<?>, String> JOIN_TABLE_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
     private static String resolveJoinColumnName(String defaultName, br.com.liviacare.worm.annotation.mapping.DbColumn dbColumn) {
         return dbColumn != null && !dbColumn.value().isBlank() ? dbColumn.value() : defaultName;

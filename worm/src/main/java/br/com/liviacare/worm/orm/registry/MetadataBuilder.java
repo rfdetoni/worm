@@ -6,6 +6,7 @@ import br.com.liviacare.worm.annotation.mapping.*;
 import br.com.liviacare.worm.api.iBaseEntity;
 import br.com.liviacare.worm.orm.mapping.ColumnConverter;
 import br.com.liviacare.worm.orm.mapping.ParamBinder;
+import br.com.liviacare.worm.orm.query.JoinClauseBuilder;
 import br.com.liviacare.worm.orm.sql.SqlConstants;
 import br.com.liviacare.worm.orm.sql.WritePlan;
 import br.com.liviacare.worm.util.AliasUtils;
@@ -67,7 +68,10 @@ final class MetadataBuilder<T> {
 
         DbTable dbTable = entityClass.getAnnotation(DbTable.class);
         this.tableName = dbTable != null ? dbTable.value() : null;
-        this.mainAlias = AliasUtils.defaultMainAlias(entityClass);
+        // Prefer table-name-derived alias for deterministic aliases across projections and entities
+        this.mainAlias = (this.tableName != null && !this.tableName.isBlank())
+                ? AliasUtils.defaultMainAlias(this.tableName)
+                : AliasUtils.defaultMainAlias(AliasUtils.entityTableName(entityClass));
         this.usedAliasesLowerCase.add(this.mainAlias.toLowerCase());
     }
 
@@ -443,7 +447,7 @@ final class MetadataBuilder<T> {
 
     private static String resolveJoinAlias(DbJoin ann, String table, String relationName) {
         if (!ann.alias().isBlank()) return AliasUtils.sanitizeAlias(ann.alias());
-        return AliasUtils.defaultJoinAlias(relationName, table);
+        return AliasUtils.defaultJoinAlias(table);
     }
 
     private static String replaceAliasReference(String expression, String fromAlias, String toAlias) {
@@ -457,7 +461,6 @@ final class MetadataBuilder<T> {
 
         String referencedColumn = resolveReferencedColumn(ann);
         if (!ann.localColumn().isBlank()) {
-            validateMainEntityColumn(ann.localColumn(), relationName, "localColumn");
             validateJoinColumn(ji, referencedColumn, relationName, "referencedColumn/targetColumn");
             return alias + "." + referencedColumn + " = " + mainAlias + "." + ann.localColumn();
         }
@@ -470,14 +473,13 @@ final class MetadataBuilder<T> {
         if (isCollection) {
             String inferredMappedBy = inferMappedByFromBackReference(ji.joinClass);
             if (inferredMappedBy == null) {
-                inferredMappedBy = singularize(tableName) + "_id";
+                inferredMappedBy = JoinClauseBuilder.singularize(tableName) + "_id";
             }
             return alias + "." + inferredMappedBy + " = " + mainAlias + "." + idColumnOrDefault();
         }
 
         validateJoinColumn(ji, referencedColumn, relationName, "referencedColumn/targetColumn");
-        String inferredLocalColumn = toSnakeCase(relationName) + "_id";
-        return alias + "." + referencedColumn + " = " + mainAlias + "." + inferredLocalColumn;
+        return JoinClauseBuilder.inferOnClause(ji.table, alias, relationName, mainAlias, referencedColumn);
     }
 
     private static String resolveReferencedColumn(DbJoin ann) {
@@ -490,23 +492,17 @@ final class MetadataBuilder<T> {
         if (joinClass.isRecord()) {
             for (RecordComponent rc : joinClass.getRecordComponents()) {
                 if (rc.getType().equals(entityClass)) {
-                    candidates.add(toSnakeCase(rc.getName()) + "_id");
+                    candidates.add(JoinClauseBuilder.toSnakeCase(rc.getName()) + "_id");
                 }
             }
         } else {
             for (Field field : getAllFields(joinClass)) {
                 if (field.getType().equals(entityClass)) {
-                    candidates.add(toSnakeCase(field.getName()) + "_id");
+                    candidates.add(JoinClauseBuilder.toSnakeCase(field.getName()) + "_id");
                 }
             }
         }
         return candidates.size() == 1 ? candidates.get(0) : null;
-    }
-
-    private void validateMainEntityColumn(String column, String relationName, String attribute) {
-        if (hasMainEntityColumn(column)) return;
-        throw new RuntimeException("@DbJoin(" + attribute + ") on relation '" + relationName + "' in "
-                + entityClass.getName() + " references unknown main-entity column '" + column + "'");
     }
 
     private void validateJoinColumn(JoinInfo ji, String column, String relationName, String attribute) {
@@ -516,36 +512,8 @@ final class MetadataBuilder<T> {
                 + ji.joinClass.getName());
     }
 
-    private boolean hasMainEntityColumn(String column) {
-        if (column == null || column.isBlank()) return false;
-        if (isRecord) {
-            for (RecordComponent comp : entityClass.getRecordComponents()) {
-                if (comp.isAnnotationPresent(DbJoin.class)) continue;
-                if (column.equals(resolveColumnName(comp))) return true;
-            }
-            return false;
-        }
-        for (Field field : getAllFields(entityClass)) {
-            if (field.isAnnotationPresent(DbJoin.class)) continue;
-            if (column.equals(resolveColumnName(field))) return true;
-        }
-        return false;
-    }
-
     private String idColumnOrDefault() {
         return (idColumnName == null || idColumnName.isBlank()) ? "id" : idColumnName;
-    }
-
-    private static String toSnakeCase(String value) {
-        if (value == null || value.isBlank()) return "id";
-        return value.replaceAll("([a-z0-9])([A-Z])", "$1_$2").toLowerCase(Locale.ROOT);
-    }
-
-    private static String singularize(String value) {
-        if (value == null || value.isBlank()) return "entity";
-        if (value.endsWith("ies") && value.length() > 3) return value.substring(0, value.length() - 3) + "y";
-        if (value.endsWith("s") && value.length() > 1) return value.substring(0, value.length() - 1);
-        return value;
     }
 
     private EntityMetadata<T> assembleFinal(Field[] allFields)
@@ -938,7 +906,7 @@ final class MetadataBuilder<T> {
                 if (dot >= 0) return left.substring(dot + 1).trim();
             }
         }
-        return singularize(tableName) + "_id";
+        return JoinClauseBuilder.singularize(tableName) + "_id";
     }
 
     private static boolean isCollectionType(Class<?> type) {

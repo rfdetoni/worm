@@ -549,17 +549,16 @@ public class OrmManager implements OrmOperations {
         return withModule(metadata, () -> {
             long startNanos = System.nanoTime();
             try {
-                // Check if entity has joins - if so, use default camelCase entity alias for consistency
                 boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
 
                 if (hasJoins) {
-                    return findById(clazz, id, AliasUtils.defaultMainAlias(metadata.entityClass()));
+                    return findById(clazz, id, AliasUtils.defaultMainAlias(metadata.tableName()));
                 }
 
                 final String sql = metadata.selectSql() + SqlConstants.WHERE + metadata.idColumnName() + " = ?";
                 final List<Object> params = List.of(id);
 
-                Optional<T> result = ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, params,
+                return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, params,
                         () -> {
                             if (metadata.hasCollectionJoins()) {
                                 final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
@@ -586,7 +585,6 @@ public class OrmManager implements OrmOperations {
                                     })
                                     .optional();
                         });
-                return result;
             } finally {
                 if (latencyRecorder != null) {
                     latencyRecorder.record("findById", System.nanoTime() - startNanos);

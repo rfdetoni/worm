@@ -115,11 +115,38 @@ public final class QueryBuilder<T> {
         Objects.requireNonNull(projMeta, "projMeta cannot be null");
         String baseSql = applyCtesAndWindowFunctions(projMeta.selectSql());
 
-        List<JoinNode> joins = filter.isNoJoin() ? List.of() : buildFilterJoinNodes(baseSql, AliasContext.NONE);
+        // Use the same alias resolution strategy as entity SELECT path. Projections
+        // may contain their own table alias tokens (e.g. appointmentSummaryProjection)
+        // generated during build; when the caller's filter requests a main-table
+        // alias we must requalify the SELECT list and FROM clause so qualifiers
+        // match the alias used in WHERE / JOIN fragments.
+        AliasContext ctx = buildAliasContext();
+        // Best-effort: replace projection-class-derived alias token (e.g. appointmentSummaryProjection)
+        // with the resolved main alias so SELECT qualifiers match FROM/JOIN/WHERE.
+        try {
+            try {
+                String projAlias = AliasUtils.defaultMainAlias(AliasUtils.entityTableName(projMeta.projectionClass()));
+                if (projAlias != null && !projAlias.isBlank()) {
+                    String targetAlias = ctx.hasAlias() ? ctx.alias() : AliasUtils.defaultMainAlias(metadata.tableName());
+                    baseSql = replaceQualifiedPrefixIgnoreCase(baseSql, projAlias, targetAlias);
+                }
+            } catch (Exception ignored) {
+                // ignore
+            }
+        } catch (Exception ignored) {
+            // ignore
+        }
+        if (ctx.hasAlias()) {
+            baseSql = requalifyUnknownQualifiers(baseSql, ctx);
+        }
+        baseSql = normaliseMainTableAlias(baseSql, ctx);
+        if (filter.isNoJoin()) baseSql = stripJoinsFromSql(baseSql);
+
+        List<JoinNode> joins = filter.isNoJoin() ? List.of() : buildFilterJoinNodes(baseSql, ctx);
         String joinsClause = renderJoinNodes(joins);
-        WhereNode whereNode = buildWhereNode(baseSql + joinsClause, AliasContext.NONE);
+        WhereNode whereNode = buildWhereNode(baseSql + joinsClause, ctx);
         String whereClause = renderWhereNode(whereNode);
-        String orderByClause = buildOrderByClause(baseSql + joinsClause + whereClause, pageable, AliasContext.NONE);
+        String orderByClause = buildOrderByClause(baseSql + joinsClause + whereClause, pageable, ctx);
         String paginationClause = pageable != null
                 ? buildPaginationClause(baseSql + joinsClause + whereClause + orderByClause, pageable, fetchOneMore)
                 : "";
@@ -138,7 +165,20 @@ public final class QueryBuilder<T> {
         List<JoinNode> nodes = new ArrayList<>();
         for (FilterBuilder.Join join : filter.getJoins()) {
             if (join == null) continue;
-            nodes.add(new JoinNode(join.type().toString(), join.table(), join.alias(), new ConditionNode(join.on())));
+            // Ensure join.ON references to the main table use the resolved alias.
+            String on = join.on();
+            if (on != null && ctx.hasAlias()) {
+                // Replace occurrences of the table name (e.g. "appointments.") with the resolved alias
+                on = replaceQualifiedPrefixIgnoreCase(on, metadata.tableName(), ctx.alias());
+                // Also replace the historic placeholder alias 'a' (used by some helpers) with the resolved alias
+                on = replaceQualifiedPrefixIgnoreCase(on, "a", ctx.alias());
+                // If the filter explicitly provided a main alias, ensure it's used
+                String provided = filter.getMainTableAlias();
+                if (provided != null && !provided.isBlank() && !provided.equals(ctx.alias())) {
+                    on = replaceQualifiedPrefixIgnoreCase(on, provided, ctx.alias());
+                }
+            }
+            nodes.add(new JoinNode(join.type().toString(), join.table(), join.alias(), new ConditionNode(on)));
         }
         return nodes;
     }
@@ -182,6 +222,44 @@ public final class QueryBuilder<T> {
         }
         return sb.toString();
     }
+
+    /**
+     * Replace occurrences of a qualified token like "token." with "replacement."
+     * matching case-insensitively and ensuring the token is not part of a larger
+     * identifier (uses the shared isIdentifierOrDot helper available in this class).
+     */
+    private static String replaceQualifiedPrefixIgnoreCase(String input, String token, String replacement) {
+        if (input == null || input.isEmpty() || token == null || token.isBlank()) return input;
+        int fromIndex = 0;
+        StringBuilder out = null;
+        int tokenLen = token.length();
+        while (true) {
+            int pos = indexOfQualifiedTokenIgnoreCase(input, token, fromIndex);
+            if (pos < 0) break;
+            if (out == null) out = new StringBuilder(input.length() + 16);
+            out.append(input, fromIndex, pos);
+            out.append(replacement).append('.');
+            fromIndex = pos + tokenLen + 1;
+        }
+        if (out == null) return input;
+        out.append(input, fromIndex, input.length());
+        return out.toString();
+    }
+
+    private static int indexOfQualifiedTokenIgnoreCase(String input, String token, int fromIndex) {
+        int tokenLen = token.length();
+        int max = input.length() - tokenLen;
+        for (int i = Math.max(0, fromIndex); i <= max; i++) {
+            if (!input.regionMatches(true, i, token, 0, tokenLen)) continue;
+            if (i > 0 && isIdentifierOrDot(input.charAt(i - 1))) continue;
+            int end = i + tokenLen;
+            if (end >= input.length() || input.charAt(end) != '.') continue;
+            return i;
+        }
+        return -1;
+    }
+
+    
 
     private String buildGroupByClause(String sqlPrefix, AliasContext ctx) {
         StringBuilder sql = new StringBuilder(sqlPrefix);
@@ -328,38 +406,43 @@ public final class QueryBuilder<T> {
     /**
      * Immutable value carrying the resolved alias state for one query build.
      */
-    private record AliasContext(boolean hasAlias, String alias) {
-        static final AliasContext NONE = new AliasContext(false, null);
+    private record AliasContext(boolean hasAlias, String alias, AliasRegistry registry) {
+        static final AliasContext NONE = new AliasContext(false, null, null);
 
-        static AliasContext of(boolean hasAlias, String alias) {
-            return hasAlias ? new AliasContext(true, alias) : NONE;
+        static AliasContext of(boolean hasAlias, String alias, AliasRegistry registry) {
+            return hasAlias ? new AliasContext(true, alias, registry) : NONE;
         }
 
         String qualifyOrNull(String column) {
             return hasAlias ? alias + "." + column : column;
         }
+
+        public AliasRegistry registry() { return registry; }
     }
 
     private AliasContext buildAliasContext() {
         String explicitAlias = blankToNull(filter.getMainTableAlias());
         boolean hasFilterJoins = !filter.getJoins().isEmpty();
-        // Also require an alias when the entity itself has @DbJoin metadata joins,
-        // so that buildFromJoinsAndWhere (count/exists) correctly aliases the main
-        // table for the ON clauses (e.g. "contact.patient_id = a.id").
         boolean hasMetaJoins = hasAnyValidMetadataJoin();
-        // Fallback detection from prebuilt SQL keeps behavior correct even if join metadata
-        // shape changes in future refactors.
-        boolean sqlHasJoin = metadata.selectSql() != null && metadata.selectSql().toUpperCase().contains(" JOIN ");
+       boolean sqlHasJoin = metadata.selectSql() != null && metadata.selectSql().toUpperCase().contains(" JOIN ");
         boolean needsAlias   = explicitAlias != null || hasFilterJoins || hasMetaJoins || sqlHasJoin;
-        String resolved = (explicitAlias != null) ? explicitAlias : AliasUtils.defaultMainAlias(metadata.entityClass());
-        if (needsAlias) {
-            Set<String> used = new HashSet<>();
-            filter.getJoins().forEach(j -> {
-                if (j.alias() != null && !j.alias().isBlank()) used.add(j.alias().toLowerCase());
-            });
-            resolved = AliasUtils.ensureUniqueAlias(resolved, used);
+
+        // Create registry and register any user-supplied join aliases to avoid collisions
+        AliasRegistry registry = new AliasRegistry();
+        filter.getJoins().forEach(j -> {
+            if (j != null && j.alias() != null && !j.alias().isBlank()) registry.registerUsedAlias(j.alias());
+        });
+
+        // Prefer class-name-derived alias for the main entity. Resolve root entity class via metadata
+        Class<?> entityClass = metadata.entityClass();
+        String resolved;
+        if (explicitAlias != null) {
+            resolved = registry.registerWithAlias(entityClass, explicitAlias);
+        } else {
+            resolved = registry.register(entityClass);
         }
-        return AliasContext.of(needsAlias, resolved);
+
+        return AliasContext.of(needsAlias, resolved, registry);
     }
 
     /** Returns true if the entity has at least one valid (non-null, non-blank) @DbJoin. */
@@ -508,7 +591,22 @@ public final class QueryBuilder<T> {
                 onClause = requalifyMainTable(onClause, metadata.tableName(), ctx.alias());
             }
 
-            appendJoinClause(sql, mj.getType().toString(), mj.getTable(), mj.getAlias(), onClause);
+            // Ensure join alias respects class-based aliasing when possible. If metadata provided an alias, try to register it;
+            // otherwise derive from join class.
+            String useAlias = mj.getAlias();
+            try {
+                if (ctx.registry() != null) {
+                    if (useAlias == null || useAlias.isBlank()) {
+                        useAlias = ctx.registry().register(mj.getJoinClass());
+                    } else {
+                        useAlias = ctx.registry().registerWithAlias(mj.getJoinClass(), useAlias);
+                    }
+                }
+            } catch (Exception ignored) {
+                // fallback to provided alias
+            }
+
+            appendJoinClause(sql, mj.getType().toString(), mj.getTable(), useAlias, onClause);
             lower = sql.toString().toLowerCase();
         }
     }
@@ -529,6 +627,13 @@ public final class QueryBuilder<T> {
             if (isDuplicateFilterJoin(fj, metaJoins)) continue;
             if (joinAlreadyPresent(lower, fj.table(), fj.alias())) continue;
 
+            String useAlias = fj.alias();
+                if (ctx.registry() != null && (useAlias == null || useAlias.isBlank())) {
+                    // register the raw table-derived alias to ensure uniqueness
+                    ctx.registry().registerUsedAlias(AliasUtils.defaultJoinAlias(fj.table()));
+            } else if (ctx.registry() != null) {
+                ctx.registry().registerUsedAlias(useAlias);
+            }
             appendJoinClause(sql, fj.type().toString(), fj.table(), fj.alias(), fj.on());
             lower = sql.toString().toLowerCase();
         }
@@ -643,7 +748,8 @@ public final class QueryBuilder<T> {
 
         String aliasToUse = ctx.hasAlias() ? ctx.alias() : null;
         if (aliasToUse == null) {
-            String fallbackAlias = AliasUtils.defaultMainAlias(metadata.entityClass());
+            // Use table-name-derived fallback alias for consistency with main alias resolution
+            String fallbackAlias = AliasUtils.defaultMainAlias(metadata.tableName());
             String fromProbe = (" FROM " + metadata.tableName() + " " + fallbackAlias).toUpperCase();
             if (sql.toString().toUpperCase().contains(fromProbe)) {
                 aliasToUse = fallbackAlias;
@@ -1026,6 +1132,34 @@ public final class QueryBuilder<T> {
     /** Replaces {@code tableName.} with {@code newAlias.} in an SQL fragment. */
     private static String requalifyMainTable(String sql, String tableName, String newAlias) {
         return replaceQualifiedPrefix(sql, tableName, newAlias, true);
+    }
+
+    /**
+     * Heuristic: find occurrences of <qualifier>.<column> where <column> is
+     * one of the main table's select columns and qualifier != tableName,
+     * then replace qualifier with the resolved alias from ctx.
+     */
+    private String requalifyUnknownQualifiers(String sql, AliasContext ctx) {
+        if (sql == null || ctx == null || !ctx.hasAlias()) return sql;
+        String out = sql;
+        for (String col : metadata.selectColumns()) {
+            if (col == null || col.isBlank()) continue;
+            // match pattern like: <qual>.<col> (case-insensitive)
+            java.util.regex.Matcher m = Pattern.compile("([A-Za-z_][A-Za-z0-9_]*)\\." + Pattern.quote(col), Pattern.CASE_INSENSITIVE).matcher(out);
+            StringBuffer sb = new StringBuffer();
+            boolean changed = false;
+            while (m.find()) {
+                String qual = m.group(1);
+                if (qual.equalsIgnoreCase(metadata.tableName())) continue;
+                if (qual.equalsIgnoreCase(ctx.alias())) continue;
+                // Replace with ctx.alias()
+                m.appendReplacement(sb, ctx.alias() + "." + col);
+                changed = true;
+            }
+            m.appendTail(sb);
+            if (changed) out = sb.toString();
+        }
+        return out;
     }
 
     private static boolean containsEqualityPredicate(String clause, String token) {
