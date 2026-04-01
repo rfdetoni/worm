@@ -58,7 +58,7 @@ Add the library to your Maven project:
 <dependency>
   <groupId>br.com.liviacare</groupId>
   <artifactId>worm</artifactId>
-  <version>1.0.2</version>
+  <version>1.0.6</version>
 </dependency>
 ```
 
@@ -532,7 +532,7 @@ If you use the library as a dependency, add the processor explicitly:
       <path>
         <groupId>br.com.liviacare</groupId>
         <artifactId>worm-processor</artifactId>
-        <version>1.0.2</version>
+        <version>1.0.6</version>
       </path>
     </annotationProcessorPaths>
   </configuration>
@@ -599,7 +599,7 @@ public SqlDialect sqlDialect() {
 
 ## Performance Guide
 
-WORM 1.0.2 ships five performance modules that activate automatically. Understanding how they work lets you tune them effectively.
+WORM 1.0.6 ships five performance modules that activate automatically. Understanding how they work lets you tune them effectively.
 
 ### 1. Compiled Query Plan Cache
 
@@ -760,9 +760,9 @@ cd worm
 
 When you build the project, you get:
 
-- `worm-1.0.0.jar` - Main library (149 KB)
-- `worm-1.0.0-sources.jar` - Source code (79 KB)
-- `worm-1.0.0-javadoc.jar` - API documentation (4.4 MB)
+- `worm-1.0.6.jar` - Main library (149 KB)
+- `worm-1.0.6-sources.jar` - Source code (79 KB)
+- `worm-1.0.6-javadoc.jar` - API documentation (4.4 MB)
 
 All artifacts are self-contained with no JPA/Hibernate dependencies.
 
@@ -799,7 +799,7 @@ Add the repository and dependency to your `pom.xml`:
 <dependency>
   <groupId>br.com.liviacare</groupId>
   <artifactId>worm</artifactId>
-  <version>1.0.1</version>
+  <version>1.0.6</version>
 </dependency>
 ```
 
@@ -823,7 +823,7 @@ Update your `~/.m2/settings.xml` to authenticate with GitHub Packages:
 
 ## Support & Documentation
 
-- 📖 [Full API Documentation](./target/worm-1.0.0-javadoc.jar)
+- 📖 [Full API Documentation](./target/worm-1.0.6-javadoc.jar)
 - 🐛 [Issue Tracker](https://github.com/liviacare/worm/issues)
 - 💬 [Discussions](https://github.com/liviacare/worm/discussions)
 
@@ -838,7 +838,7 @@ Update your `~/.m2/settings.xml` to authenticate with GitHub Packages:
 - ✅ `FilterBuilder` typed overloads — all comparison predicates accept `WormAttribute<E,V>` for compile-time safety
 - ✅ `FilterBuilder.rawWhere(String, List<Object>)` — escape hatch for custom SQL fragments
 
-### Version 1.0.0 (2026-03-17)
+### Version 1.0.1 (2026-03-23)
 - ✅ Initial release
 - ✅ Core ORM functionality
 - ✅ Spring Boot auto-configuration

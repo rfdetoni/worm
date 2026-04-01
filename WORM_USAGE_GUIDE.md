@@ -73,7 +73,7 @@ Instead, WORM is explicit:
 <dependency>
   <groupId>br.com.liviacare</groupId>
   <artifactId>worm</artifactId>
-  <version>1.0.2</version>
+  <version>1.0.6</version>
 </dependency>
 ```
 
@@ -1668,7 +1668,7 @@ When consuming WORM as a library dependency, add the processor to the compiler p
       <path>
         <groupId>br.com.liviacare</groupId>
         <artifactId>worm-processor</artifactId>
-        <version>1.0.2</version>
+        <version>1.0.6</version>
       </path>
     </annotationProcessorPaths>
   </configuration>
