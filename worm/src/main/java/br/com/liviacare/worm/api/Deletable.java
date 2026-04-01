@@ -30,4 +30,25 @@ public interface Deletable<T extends Deletable<T, ID>, ID> {
     private static OrmOperations orm() {
         return OrmManagerLocator.getOrmManager();
     }
+
+    /**
+     * Bypasses any soft-delete mechanisms (like @Active or @DeletedAt)
+     * and permanently removes the records from the database.
+     */
+    final class hard {
+        private hard() {}
+
+        public static <E, ID> void deleteById(Class<E> clazz, ID id) {
+            orm().hardDeleteById(clazz, id);
+        }
+
+        @SuppressWarnings("unchecked")
+        public static void deleteAll(List<? extends Deletable<?, ?>> entities) {
+            orm().hardDeleteAll((List<Deletable<?, ?>>) entities);
+        }
+
+        public static void delete(Deletable<?, ?> entity) {
+            orm().hardDelete(entity);
+        }
+    }
 }

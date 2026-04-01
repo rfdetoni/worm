@@ -1,5 +1,6 @@
 package br.com.liviacare.worm.query;
 
+import br.com.liviacare.worm.orm.query.JoinClauseBuilder;
 import br.com.liviacare.worm.orm.registry.WormAttribute;
 import br.com.liviacare.worm.util.AliasUtils;
 
@@ -79,7 +80,7 @@ public final class FilterBuilder {
     public FilterBuilder join(JoinType type, String table, String alias, String on) {
         if (table == null || table.isBlank() || on == null || on.isBlank()) return this;
         String baseAlias = (alias == null || alias.isBlank())
-                ? AliasUtils.defaultJoinAlias(null, table)
+                ? AliasUtils.defaultJoinAlias(table)
                 : AliasUtils.sanitizeAlias(alias);
 
         Join originalJoin = new Join(type == null ? JoinType.INNER : type, table, baseAlias, on);
@@ -129,6 +130,49 @@ public final class FilterBuilder {
 
     public FilterBuilder crossJoin(String table, String alias, String on) {
         return join(JoinType.CROSS, table, alias, on);
+    }
+
+    /**
+     * Convenience: add a join by relation name and infer the ON clause using
+     * a safer heuristic.
+     *
+     * Heuristic:
+     * - inferLocal = toSnakeCase(relationName) + "_id"
+     * - if the join table name contains the relationName (case-insensitive),
+     *   assume the join table stores the FK column and construct:
+     *     joinedAlias.<inferLocal> = mainAlias.<inferLocal>
+     * - otherwise fall back to the common case used by many-to-one:
+     *     joinedAlias.id = mainAlias.<inferLocal>
+     */
+    public FilterBuilder joinByRelation(JoinType type, String table, String relationName) {
+        if (table == null || table.isBlank()) return this;
+        if (relationName == null || relationName.isBlank()) return join(type, table, null, null);
+
+        // Derive alias from the table name to keep aliases stable and independent of Java relation names
+        String baseAlias = AliasUtils.defaultJoinAlias(table);
+        String mainAlias = (this.mainTableAliasName != null && !this.mainTableAliasName.isBlank())
+                ? this.mainTableAliasName
+                : "a";
+
+        String on = JoinClauseBuilder.inferOnClause(table, baseAlias, relationName, mainAlias, "id");
+
+        return join(type, table, baseAlias, on);
+    }
+
+    public FilterBuilder joinByRelation(String table, String relationName) {
+        return joinByRelation(JoinType.INNER, table, relationName);
+    }
+
+    public FilterBuilder leftJoinByRelation(String table, String relationName) {
+        return joinByRelation(JoinType.LEFT, table, relationName);
+    }
+
+    public FilterBuilder rightJoinByRelation(String table, String relationName) {
+        return joinByRelation(JoinType.RIGHT, table, relationName);
+    }
+
+    public FilterBuilder crossJoinByRelation(String table, String relationName) {
+        return joinByRelation(JoinType.CROSS, table, relationName);
     }
 
     /**
@@ -670,6 +714,21 @@ public final class FilterBuilder {
 
     private static boolean isIdentifierOrDot(char ch) {
         return Character.isLetterOrDigit(ch) || ch == '_' || ch == '.';
+    }
+
+    private static String toSnakeCase(String s) {
+        if (s == null || s.isEmpty()) return s;
+        StringBuilder sb = new StringBuilder(s.length() + 4);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (Character.isUpperCase(c)) {
+                if (i > 0) sb.append('_');
+                sb.append(Character.toLowerCase(c));
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     public String getMainTableAlias() { return mainTableAliasName; }

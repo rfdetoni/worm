@@ -91,11 +91,11 @@ class DbJoinErgonomicsTest {
     }
 
     @DbTable("users")
-    static class UserWithInvalidLocalColumn {
+    static class UserWithUnmappedLocalColumn {
         @DbId("id")
         private Long id;
 
-        @DbJoin(localColumn = "does_not_exist")
+        @DbJoin(localColumn = "manager_id")
         private Department department;
     }
 
@@ -123,9 +123,11 @@ class DbJoinErgonomicsTest {
         JoinInfo join = firstJoin(metadata);
 
         assertEquals("departments", join.getTable());
-        assertEquals("department", join.getAlias());
-        assertEquals("department.id = userWithInferredManyToOne.department_id", join.getOn());
-        assertTrue(metadata.selectSql().contains("JOIN departments department ON department.id = userWithInferredManyToOne.department_id"));
+        // Alias is derived from table name
+        assertEquals("departments", join.getAlias());
+        // main alias now derived from table 'users'
+        assertEquals("departments.id = users.department_id", join.getOn());
+        assertTrue(metadata.selectSql().contains("JOIN departments departments ON departments.id = users.department_id"));
     }
 
     @Test
@@ -135,7 +137,7 @@ class DbJoinErgonomicsTest {
 
         assertEquals("orders", join.getTable());
         assertEquals("orders", join.getAlias());
-        assertEquals("orders.owner_id = userWithMappedByCollection.id", join.getOn());
+        assertEquals("orders.owner_id = users.id", join.getOn());
     }
 
     @Test
@@ -143,8 +145,9 @@ class DbJoinErgonomicsTest {
         EntityMetadata<UserWithLocalColumn> metadata = EntityMetadata.of(UserWithLocalColumn.class);
         JoinInfo join = firstJoin(metadata);
 
-        assertEquals("manager", join.getAlias());
-        assertEquals("manager.id = userWithLocalColumn.manager_id", join.getOn());
+        // Alias derived from join table 'departments'
+        assertEquals("departments", join.getAlias());
+        assertEquals("departments.id = users.manager_id", join.getOn());
     }
 
     @Test
@@ -152,7 +155,7 @@ class DbJoinErgonomicsTest {
         EntityMetadata<UserWithInferredCollectionByBackRef> metadata = EntityMetadata.of(UserWithInferredCollectionByBackRef.class);
         JoinInfo join = firstJoin(metadata);
 
-        assertEquals("orders.user_id = userWithInferredCollectionByBackRef.id", join.getOn());
+        assertEquals("orders.user_id = users.id", join.getOn());
     }
 
     @Test
@@ -160,15 +163,16 @@ class DbJoinErgonomicsTest {
         EntityMetadata<UserWithTargetColumn> metadata = EntityMetadata.of(UserWithTargetColumn.class);
         JoinInfo join = firstJoin(metadata);
 
-        assertEquals("department.code = userWithTargetColumn.dept_code", join.getOn());
+        assertEquals("departments.code = users.dept_code", join.getOn());
     }
 
     @Test
-    void failFastWhenLocalColumnDoesNotExist() {
-        RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> EntityMetadata.of(UserWithInvalidLocalColumn.class));
+    void allowUnmappedLocalColumnForJoinOn() {
+        EntityMetadata<UserWithUnmappedLocalColumn> metadata = EntityMetadata.of(UserWithUnmappedLocalColumn.class);
+        JoinInfo join = firstJoin(metadata);
 
-        assertTrue(ex.getMessage().contains("does_not_exist"));
+        assertEquals("departments.id = users.manager_id", join.getOn());
+        assertFalse(metadata.selectSql().contains(" AS manager_id"));
     }
 
     @Test
@@ -194,4 +198,3 @@ class DbJoinErgonomicsTest {
         throw new AssertionError("No join metadata found");
     }
 }
-

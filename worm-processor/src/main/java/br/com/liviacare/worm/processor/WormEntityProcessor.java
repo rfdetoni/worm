@@ -1,33 +1,12 @@
 package br.com.liviacare.worm.processor;
 
-import br.com.liviacare.worm.annotation.audit.Active;
-import br.com.liviacare.worm.annotation.audit.CreatedAt;
-import br.com.liviacare.worm.annotation.audit.CreatedBy;
-import br.com.liviacare.worm.annotation.audit.DeletedAt;
-import br.com.liviacare.worm.annotation.audit.UpdatedAt;
-import br.com.liviacare.worm.annotation.audit.UpdatedBy;
-import br.com.liviacare.worm.annotation.mapping.DbColumn;
-import br.com.liviacare.worm.annotation.mapping.DbId;
-import br.com.liviacare.worm.annotation.mapping.DbJoin;
-import br.com.liviacare.worm.annotation.mapping.DbTable;
-import br.com.liviacare.worm.annotation.mapping.DbVersion;
-import br.com.liviacare.worm.annotation.mapping.Track;
+import br.com.liviacare.worm.annotation.audit.*;
+import br.com.liviacare.worm.annotation.mapping.*;
 import br.com.liviacare.worm.util.AliasUtils;
 
-import javax.annotation.processing.AbstractProcessor;
-import javax.annotation.processing.Filer;
-import javax.annotation.processing.Messager;
-import javax.annotation.processing.ProcessingEnvironment;
-import javax.annotation.processing.RoundEnvironment;
-import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
+import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
-import javax.lang.model.element.Element;
-import javax.lang.model.element.ElementKind;
-import javax.lang.model.element.Modifier;
-import javax.lang.model.element.PackageElement;
-import javax.lang.model.element.TypeElement;
-import javax.lang.model.element.VariableElement;
+import javax.lang.model.element.*;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
@@ -383,7 +362,10 @@ public final class WormEntityProcessor extends AbstractProcessor {
                 continue;
             }
             VariableElement field = (VariableElement) enclosed;
-            if (field.getModifiers().contains(Modifier.STATIC) || field.getAnnotation(DbJoin.class) != null) {
+            // Skip static fields, join mappings and transient fields (not persisted)
+            if (field.getModifiers().contains(Modifier.STATIC)
+                    || field.getAnnotation(DbJoin.class) != null
+                    || field.getModifiers().contains(Modifier.TRANSIENT)) {
                 continue;
             }
             DbId dbId = field.getAnnotation(DbId.class);
@@ -394,6 +376,13 @@ public final class WormEntityProcessor extends AbstractProcessor {
             String typeLiteral = classLiteralType(field.asType());
             boolean primitive = field.asType().getKind().isPrimitive();
             Active active = field.getAnnotation(Active.class);
+
+            TypeElement activeRecordType = elements.getTypeElement("br.com.liviacare.worm.ActiveRecord");
+            boolean isActiveRecord = activeRecordType != null && types.isAssignable(entityType.asType(), activeRecordType.asType());
+            if (isActiveRecord && isJsonCandidate(field.asType()) && (dbColumn == null || !dbColumn.json()) && dbId == null) {
+                continue;
+            }
+
             out.add(new PropertyDescriptorModel(
                     property,
                     column,
@@ -413,6 +402,28 @@ public final class WormEntityProcessor extends AbstractProcessor {
         return out;
     }
 
+    /**
+     * Heuristic: decide whether a TypeMirror represents a non-scalar / JSON-candidate type.
+     * We treat java.* and javax.* scalar types (String, boxed primitives, java.time.*, UUID)
+     * as non-JSON candidates; collections/maps and any user-defined types are JSON candidates.
+     */
+    private boolean isJsonCandidate(TypeMirror tm) {
+        if (tm == null) return false;
+        if (tm.getKind().isPrimitive()) return false;
+        String s = tm.toString();
+        if ("java.lang.Object".equals(s)) return true;
+        // Collections and maps are explicit JSON candidates
+        if (s.startsWith("java.util.List") || s.startsWith("java.util.Collection") || s.startsWith("java.util.Map")) return true;
+        // Treat common scalar java types as non-json-candidate
+        if (s.equals("java.lang.String") || s.equals("java.lang.Boolean") || s.equals("java.lang.Byte")
+                || s.equals("java.lang.Short") || s.equals("java.lang.Integer") || s.equals("java.lang.Long")
+                || s.equals("java.lang.Float") || s.equals("java.lang.Double") || s.startsWith("java.time.")
+                || s.equals("java.util.UUID")) return false;
+        // Anything outside java./javax. packages is likely an application object => json candidate
+        if (!s.startsWith("java.") && !s.startsWith("javax.")) return true;
+        return false;
+    }
+
     private boolean supportsStaticGeneration(TypeElement entityType, List<PropertyDescriptorModel> properties, List<JoinDescriptorModel> joins) {
         if (entityType.getKind() != ElementKind.CLASS) {
             return false;
@@ -428,20 +439,22 @@ public final class WormEntityProcessor extends AbstractProcessor {
             return false;
         }
         for (Element enclosed : entityType.getEnclosedElements()) {
-            DbJoin join = enclosed.getAnnotation(DbJoin.class);
+            // Ignore non-field members and transient fields for generation checks
+            if (enclosed.getKind() != ElementKind.FIELD) continue;
+            VariableElement field = (VariableElement) enclosed;
+            if (field.getModifiers().contains(Modifier.TRANSIENT)) continue;
+
+            DbJoin join = field.getAnnotation(DbJoin.class);
             if (join != null) {
-                if (!(enclosed instanceof VariableElement field)) {
-                    return false;
-                }
                 if (isCollectionField(field)) {
                     return false;
                 }
             }
-            if (enclosed.getAnnotation(UpdatedBy.class) != null) {
+            if (field.getAnnotation(UpdatedBy.class) != null) {
                 return false;
             }
-            if (enclosed.getKind() == ElementKind.FIELD && enclosed.getAnnotation(DbColumn.class) != null) {
-                DbColumn dbColumn = enclosed.getAnnotation(DbColumn.class);
+            if (field.getAnnotation(DbColumn.class) != null) {
+                DbColumn dbColumn = field.getAnnotation(DbColumn.class);
                 if (dbColumn.json() || !dbColumn.expr().isBlank()) {
                     return false;
                 }
@@ -462,7 +475,8 @@ public final class WormEntityProcessor extends AbstractProcessor {
 
     private List<JoinDescriptorModel> collectToOneJoinDescriptors(TypeElement entityType) {
         List<JoinDescriptorModel> joins = new ArrayList<>();
-        String mainAlias = AliasUtils.defaultMainAlias(entityType.getSimpleName().toString());
+        String tableName = resolveEntityTableName(entityType);
+        String mainAlias = AliasUtils.defaultMainAlias(tableName);
         for (Element enclosed : entityType.getEnclosedElements()) {
             if (!(enclosed instanceof VariableElement field)) {
                 continue;
@@ -477,12 +491,20 @@ public final class WormEntityProcessor extends AbstractProcessor {
             }
             String relationName = field.getSimpleName().toString();
             String table = resolveJoinTable(join, joinType);
-            String alias = join.alias().isBlank() ? AliasUtils.defaultJoinAlias(relationName, table) : AliasUtils.sanitizeAlias(join.alias());
+            String alias = join.alias().isBlank() ? AliasUtils.defaultJoinAlias(table) : AliasUtils.sanitizeAlias(join.alias());
             String on = resolveJoinOn(entityType, field, join, joinType, alias, relationName, mainAlias);
             joins.add(new JoinDescriptorModel(relationName, joinType.getQualifiedName().toString(), table, alias, on, join.type().name()));
         }
         return joins;
     }
+
+            private static String resolveEntityTableName(TypeElement entityType) {
+                DbTable dbTable = entityType.getAnnotation(DbTable.class);
+                if (dbTable != null && !dbTable.value().isBlank()) {
+                    return dbTable.value();
+                }
+                return entityType.getSimpleName().toString().toLowerCase();
+            }
 
     private static boolean isCollectionField(VariableElement field) {
         return field.asType().toString().startsWith("java.util.List<")

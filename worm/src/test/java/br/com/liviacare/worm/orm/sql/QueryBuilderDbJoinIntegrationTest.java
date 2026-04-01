@@ -62,18 +62,17 @@ class QueryBuilderDbJoinIntegrationTest {
         String select = qb.buildSelectSql(null, false);
         String count = qb.buildCountSql();
         String exists = qb.buildExistsSql();
-
-        assertTrue(select.matches("(?s).*JOIN\\s+departments\\s+department\\s+ON\\s+department\\.id\\s*=\\s*userWithDepartment\\d*\\.department_id.*"));
+        assertTrue(select.matches("(?s).*JOIN\\s+departments\\s+departments\\s+ON\\s+departments\\.id\\s*=\\s*users\\.department_id.*"));
         assertTrue(select.contains("WHERE"), select);
         assertTrue(select.contains("?"), select);
 
         assertTrue(count.contains("SELECT COUNT(*)"));
-        assertTrue(count.matches("(?s).*JOIN\\s+departments\\s+department\\s+ON\\s+department\\.id\\s*=\\s*userWithDepartment\\d*\\.department_id.*"));
+        assertTrue(count.matches("(?s).*JOIN\\s+departments\\s+departments\\s+ON\\s+departments\\.id\\s*=\\s*users\\.department_id.*"));
         assertTrue(count.contains("WHERE"), count);
         assertTrue(count.contains("?"), count);
 
         assertTrue(exists.contains("SELECT 1"));
-        assertTrue(exists.matches("(?s).*JOIN\\s+departments\\s+department\\s+ON\\s+department\\.id\\s*=\\s*userWithDepartment\\d*\\.department_id.*"));
+        assertTrue(exists.matches("(?s).*JOIN\\s+departments\\s+departments\\s+ON\\s+departments\\.id\\s*=\\s*users\\.department_id.*"));
         assertTrue(exists.contains("LIMIT 1"));
 
         assertEquals(List.of(10L), qb.getParameters());
@@ -86,7 +85,7 @@ class QueryBuilderDbJoinIntegrationTest {
 
         String select = qb.buildSelectSql(null, false);
 
-        assertTrue(select.matches("(?s).*JOIN\\s+orders\\s+orders\\s+ON\\s+orders\\.user_id\\s*=\\s*userWithOrders\\d*\\.id.*"));
+        assertTrue(select.matches("(?s).*JOIN\\s+orders\\s+orders\\s+ON\\s+orders\\.user_id\\s*=\\s*users\\.id.*"));
     }
 }
 

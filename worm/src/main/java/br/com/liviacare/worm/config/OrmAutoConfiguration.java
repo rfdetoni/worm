@@ -11,6 +11,7 @@ import br.com.liviacare.worm.orm.dialect.PostgresDialect;
 import br.com.liviacare.worm.orm.dialect.SqlDialect;
 import br.com.liviacare.worm.orm.registry.EntityRegistry;
 import com.zaxxer.hikari.HikariDataSource;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -44,18 +45,62 @@ public class OrmAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(OrmOperations.class)
     public OrmOperations ormManager(
-            DataSource dataSource,
+            ApplicationContext applicationContext,
+            ObjectProvider<DataSource> dataSourceProvider,
             WormProperties properties,
             SqlDialect sqlDialect,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             PlatformTransactionManager transactionManager,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             LatencyRecorder latencyRecorder) {
+        DataSource dataSource = resolveDataSource(applicationContext, dataSourceProvider);
+
         applyHikariPreparedStatementCacheDefaults(dataSource);
         JdbcClient jdbcClient = JdbcClient.create(dataSource);
         OrmManager manager = new OrmManager(jdbcClient, properties, sqlDialect, dataSource, transactionManager, latencyRecorder);
         OrmManagerLocator.setOrmManager(manager);
         return manager;
+    }
+
+    /**
+     * Resolve a single DataSource to be used by WORM. Preference order:
+     * 1) bean named 'tenantRoutingDataSource'
+     * 2) the single DataSource in the context
+     * 3) ObjectProvider.getIfAvailable() (returns primary if defined)
+     * Throws an informative IllegalStateException when ambiguous or missing.
+     */
+    private DataSource resolveDataSource(ApplicationContext applicationContext, ObjectProvider<DataSource> dataSourceProvider) {
+        DataSource dataSource;
+        if (applicationContext.containsBean("tenantRoutingDataSource")) {
+            dataSource = applicationContext.getBean("tenantRoutingDataSource", DataSource.class);
+        } else {
+            var dss = applicationContext.getBeansOfType(DataSource.class);
+            if (dss.size() == 1) {
+                dataSource = dss.values().iterator().next();
+            } else {
+                dataSource = dataSourceProvider.getIfAvailable();
+                if (dataSource == null) {
+                    throw new IllegalStateException(
+                            "[WORM(Weightless ORM)] Ambiguous DataSource beans found. " +
+                                    "When multiple DataSource beans exist, expose a single routing DataSource named 'tenantRoutingDataSource' or mark exactly one DataSource as @Primary, or define your own OrmOperations bean.");
+                }
+            }
+        }
+
+        return dataSource;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(JdbcTemplate.class)
+    public JdbcTemplate jdbcTemplate(ApplicationContext applicationContext, ObjectProvider<DataSource> dataSourceProvider) {
+        DataSource ds = resolveDataSource(applicationContext, dataSourceProvider);
+        return new JdbcTemplate(ds);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TransactionTemplate.class)
+    public TransactionTemplate transactionTemplate(PlatformTransactionManager transactionManager) {
+        return new TransactionTemplate(transactionManager);
     }
 
     @Bean
@@ -91,7 +136,15 @@ public class OrmAutoConfiguration {
         if (hikari.getDataSourceProperties().containsKey(key)) {
             return;
         }
-        hikari.addDataSourceProperty(key, value);
+        try {
+            hikari.addDataSourceProperty(key, value);
+        } catch (IllegalStateException ex) {
+            // Hikari seals its configuration once the pool is started. If we reach here,
+            // it means the DataSource was already initialized elsewhere. Best effort:
+            // don't fail application startup for a non-critical performance tweak.
+            // The driver/property may already be set, or cannot be changed at runtime.
+            // Ignore the exception and proceed.
+        }
     }
 
     @EventListener(ApplicationReadyEvent.class)
