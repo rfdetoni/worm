@@ -57,6 +57,10 @@ public interface OrmOperations {
 
     <T, I> Optional<T> findById(Class<T> clazz, I id, String mainAlias);
 
+    default <T> List<T> findByIdAsList(Class<T> clazz, Object id, String mainAlias) {
+        return this.<T, Object>findById(clazz, id, mainAlias).map(List::of).orElseGet(List::of);
+    }
+
     <T, P> Optional<P> findById(Class<T> entityClass, Object id, Class<P> projectionClass);
 
     <T> Optional<T> findOne(Class<T> clazz, FilterBuilder filter);

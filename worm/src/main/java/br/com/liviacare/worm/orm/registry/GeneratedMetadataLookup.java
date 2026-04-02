@@ -30,5 +30,8 @@ final class GeneratedMetadataLookup {
     static <T> GeneratedEntityMetadataFactory<T> forEntity(Class<T> entityClass) {
         return (GeneratedEntityMetadataFactory<T>) FACTORIES.get(entityClass);
     }
-}
 
+    static Map<Class<?>, GeneratedEntityMetadataFactory<?>> factories() {
+        return FACTORIES;
+    }
+}

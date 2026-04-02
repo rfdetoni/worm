@@ -1,42 +1,22 @@
 package br.com.liviacare.worm.processor;
 
-import br.com.liviacare.worm.annotation.audit.Active;
-import br.com.liviacare.worm.annotation.audit.CreatedAt;
-import br.com.liviacare.worm.annotation.audit.CreatedBy;
-import br.com.liviacare.worm.annotation.audit.DeletedAt;
-import br.com.liviacare.worm.annotation.audit.UpdatedAt;
+import br.com.liviacare.worm.annotation.audit.*;
 import br.com.liviacare.worm.annotation.mapping.DbColumn;
 import br.com.liviacare.worm.annotation.mapping.DbId;
 import br.com.liviacare.worm.annotation.mapping.DbJoin;
 import br.com.liviacare.worm.annotation.mapping.DbTable;
 
-import javax.annotation.processing.AbstractProcessor;
-import javax.annotation.processing.Filer;
-import javax.annotation.processing.Messager;
-import javax.annotation.processing.ProcessingEnvironment;
-import javax.annotation.processing.RoundEnvironment;
-import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
+import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
-import javax.lang.model.element.Element;
-import javax.lang.model.element.ElementKind;
-import javax.lang.model.element.Modifier;
-import javax.lang.model.element.PackageElement;
-import javax.lang.model.element.TypeElement;
-import javax.lang.model.element.VariableElement;
+import javax.lang.model.element.*;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
 import java.io.Writer;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Annotation processor that generates {@code {EntityName}_.java} static metamodel classes.
@@ -75,6 +55,7 @@ public final class WormMetamodelProcessor extends AbstractProcessor {
     private Types types;
     private TypeMirror temporalType;
     private TypeMirror comparableType;
+    private boolean dslAvailable;
 
     @Override
     public synchronized void init(ProcessingEnvironment processingEnv) {
@@ -87,6 +68,7 @@ public final class WormMetamodelProcessor extends AbstractProcessor {
         TypeElement comparable = elements.getTypeElement("java.lang.Comparable");
         this.temporalType = temporal != null ? temporal.asType() : null;
         this.comparableType = comparable != null ? comparable.asType() : null;
+        this.dslAvailable = elements.getTypeElement("br.com.liviacare.worm.dsl.EntityPath") != null;
     }
 
     @Override
@@ -96,7 +78,9 @@ public final class WormMetamodelProcessor extends AbstractProcessor {
             if (!entityType.getModifiers().contains(Modifier.PUBLIC) || !isGeneratedTypeAccessible(entityType)) continue;
             try {
                 writeMetamodelClass(entityType);
-                writeQueryPathClass(entityType);
+                if (dslAvailable) {
+                    writeQueryPathClass(entityType);
+                }
             } catch (IOException e) {
                 messager.printMessage(
                         Diagnostic.Kind.ERROR,

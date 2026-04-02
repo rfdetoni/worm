@@ -8,8 +8,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class WormDslSqlTest {
 
@@ -67,6 +66,34 @@ class WormDslSqlTest {
     }
 
     @Test
+    void queryShape_differsWhenAliasDiffers() {
+        WUserPath u1 = new WUserPath("u1");
+        WUserPath u2 = new WUserPath("u2");
+
+        var q1 = Worm.selectFrom(u1).where(u1.id.eq(UUID.fromString("00000000-0000-0000-0000-000000000001")));
+        var q2 = Worm.selectFrom(u2).where(u2.id.eq(UUID.fromString("00000000-0000-0000-0000-000000000001")));
+
+        QueryShape s1 = SqlRenderer.shapeOf(q1);
+        QueryShape s2 = SqlRenderer.shapeOf(q2);
+
+        assertNotEquals(s1, s2);
+        assertNotEquals(s1.hashCode(), s2.hashCode());
+    }
+
+    @Test
+    void queryShape_matchesForSameStructure() {
+        WUserPath u = WUserPath.user;
+        var q1 = Worm.selectFrom(u).where(u.name.eq("Alice")).orderBy(u.createdAt.desc()).limit(10);
+        var q2 = Worm.selectFrom(u).where(u.name.eq("Bob")).orderBy(u.createdAt.desc()).limit(10);
+
+        QueryShape s1 = SqlRenderer.shapeOf(q1);
+        QueryShape s2 = SqlRenderer.shapeOf(q2);
+
+        assertEquals(s1, s2);
+        assertEquals(s1.hashCode(), s2.hashCode());
+    }
+
+    @Test
     void emptyIn_rendersFalsePredicate() {
         WUserPath u = WUserPath.user;
         var query = Worm.selectFrom(u).where(u.id.in(List.of()));
@@ -112,4 +139,3 @@ class WormDslSqlTest {
         }
     }
 }
-

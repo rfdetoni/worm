@@ -16,20 +16,30 @@ public final class QueryPlanCache {
     private QueryPlanCache() {
     }
 
-    public static QueryPlan getOrBuild(QueryShape shape, Supplier<QueryPlan> builder) {
+    public static QueryPlan get(QueryShape shape) {
         QueryPlan existing = CACHE.get(shape);
         if (existing != null) {
             HITS.increment();
-            return existing;
         }
-        QueryPlan built = builder.get();
-        QueryPlan winner = CACHE.putIfAbsent(shape, built);
+        return existing;
+    }
+
+    public static QueryPlan put(QueryShape shape, QueryPlan plan) {
+        QueryPlan winner = CACHE.putIfAbsent(shape, plan);
         if (winner == null) {
             MISSES.increment();
-            return built;
+            return plan;
         }
         HITS.increment();
         return winner;
+    }
+
+    public static QueryPlan getOrBuild(QueryShape shape, Supplier<QueryPlan> builder) {
+        QueryPlan cached = get(shape);
+        if (cached != null) {
+            return cached;
+        }
+        return put(shape, builder.get());
     }
 
     public static int size() {
@@ -57,4 +67,3 @@ public final class QueryPlanCache {
         MISSES.reset();
     }
 }
-

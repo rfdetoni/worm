@@ -39,9 +39,7 @@ public class SimpleWarmupStrategy implements WarmupStrategy {
 
     private void warmupSelectById(EntityMetadata<?> metadata) {
         long start = System.currentTimeMillis();
-        // Construct selectById SQL the same way OrmManager does (no dedicated accessor needed)
-        final String selectByIdSql = metadata.selectSql()
-                + " WHERE " + metadata.idColumnName() + " = ?";
+        final String selectByIdSql = metadata.idSelectSql();
         try {
             jdbcTemplate.query(selectByIdSql,
                     ps -> ps.setObject(1, ZERO_UUID),

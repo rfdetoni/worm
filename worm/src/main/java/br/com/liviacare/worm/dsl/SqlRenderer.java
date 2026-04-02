@@ -52,7 +52,11 @@ final class SqlRenderer {
     }
 
     static List<Object> collectParams(AbstractSelectQuery<?> query) {
-        ArrayList<Object> params = new ArrayList<>(16);
+        int paramCount = countParams(query);
+        if (paramCount == 0) {
+            return List.of();
+        }
+        ArrayList<Object> params = new ArrayList<>(paramCount);
         for (JoinSpec join : query.joins()) {
             collectPredicateParams(join.on(), params);
         }
@@ -62,6 +66,26 @@ final class SqlRenderer {
         }
         if (query.offsetValue() != null) {
             params.add(query.offsetValue());
+        }
+        return params;
+    }
+
+    static Object[] collectParamsArray(AbstractSelectQuery<?> query) {
+        int paramCount = countParams(query);
+        if (paramCount == 0) {
+            return new Object[0];
+        }
+        Object[] params = new Object[paramCount];
+        int next = 0;
+        for (JoinSpec join : query.joins()) {
+            next = collectPredicateParams(join.on(), params, next);
+        }
+        next = collectPredicateParams(query.whereNode(), params, next);
+        if (query.limitValue() != null) {
+            params[next++] = query.limitValue();
+        }
+        if (query.offsetValue() != null) {
+            params[next] = query.offsetValue();
         }
         return params;
     }
@@ -313,6 +337,52 @@ final class SqlRenderer {
         return shape.toString();
     }
 
+    private static int countParams(AbstractSelectQuery<?> query) {
+        int count = 0;
+        for (JoinSpec join : query.joins()) {
+            count += countPredicateParams(join.on());
+        }
+        count += countPredicateParams(query.whereNode());
+        if (query.limitValue() != null) {
+            count++;
+        }
+        if (query.offsetValue() != null) {
+            count++;
+        }
+        return count;
+    }
+
+    private static int countPredicateParams(Predicate predicate) {
+        if (predicate == null) return 0;
+        if (predicate instanceof ComparisonPredicate comparison) {
+            return countExpressionParams(comparison.left()) + countExpressionParams(comparison.right());
+        }
+        if (predicate instanceof BetweenPredicate<?> between) {
+            return countExpressionParams(between.lower()) + countExpressionParams(between.upper());
+        }
+        if (predicate instanceof InPredicate<?> in) {
+            return in.values().size();
+        }
+        if (predicate instanceof LikePredicate) {
+            return 1;
+        }
+        if (predicate instanceof NotPredicate not) {
+            return countPredicateParams(not.inner());
+        }
+        if (predicate instanceof JunctionPredicate junction) {
+            int count = 0;
+            for (Predicate p : junction.predicates()) {
+                count += countPredicateParams(p);
+            }
+            return count;
+        }
+        return 0;
+    }
+
+    private static int countExpressionParams(Expression<?> expression) {
+        return expression instanceof ValueExpression<?> ? 1 : 0;
+    }
+
     private static void collectPredicateParams(Predicate predicate, List<Object> out) {
         if (predicate == null) return;
         if (predicate instanceof ComparisonPredicate comparison) {
@@ -351,6 +421,47 @@ final class SqlRenderer {
         if (expression instanceof ValueExpression<?> valueExpression) {
             out.add(toBindValue(valueExpression.value()));
         }
+    }
+
+    private static int collectPredicateParams(Predicate predicate, Object[] out, int idx) {
+        if (predicate == null) return idx;
+        if (predicate instanceof ComparisonPredicate comparison) {
+            idx = collectExpressionParam(comparison.left(), out, idx);
+            idx = collectExpressionParam(comparison.right(), out, idx);
+            return idx;
+        }
+        if (predicate instanceof BetweenPredicate<?> between) {
+            out[idx++] = toBindValue(between.lower().value());
+            out[idx++] = toBindValue(between.upper().value());
+            return idx;
+        }
+        if (predicate instanceof InPredicate<?> in) {
+            for (Object value : in.values()) {
+                out[idx++] = toBindValue(value);
+            }
+            return idx;
+        }
+        if (predicate instanceof LikePredicate like) {
+            out[idx++] = toLikeBindValue(like.mode(), like.value().value());
+            return idx;
+        }
+        if (predicate instanceof NotPredicate not) {
+            return collectPredicateParams(not.inner(), out, idx);
+        }
+        if (predicate instanceof JunctionPredicate junction) {
+            for (Predicate p : junction.predicates()) {
+                idx = collectPredicateParams(p, out, idx);
+            }
+            return idx;
+        }
+        return idx;
+    }
+
+    private static int collectExpressionParam(Expression<?> expression, Object[] out, int idx) {
+        if (expression instanceof ValueExpression<?> valueExpression) {
+            out[idx++] = toBindValue(valueExpression.value());
+        }
+        return idx;
     }
 
     private static Object toBindValue(Object value) {
