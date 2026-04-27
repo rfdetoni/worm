@@ -555,36 +555,39 @@ public class OrmManager implements OrmOperations {
                     return findById(clazz, id, AliasUtils.defaultMainAlias(metadata.tableName()));
                 }
 
-                final String sql = metadata.selectSql() + SqlConstants.WHERE + metadata.idColumnName() + " = ?";
-                final List<Object> params = List.of(id);
+                final String sql = metadata.idSelectSql();
+                final java.util.function.Supplier<Optional<T>> action = () -> {
+                    if (metadata.hasCollectionJoins()) {
+                        final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
+                        List<T> rows = executor.client().sql(sql).param(id)
+                                .query((rs, _) -> {
+                                    if (planRef[0] == null) {
+                                        // PERF: cache entity row plan per query execution.
+                                        planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
+                                    }
+                                    return EntityMapper.mapRow(rs, metadata, planRef[0]);
+                                })
+                                .list();
+                        List<T> merged = EntityMapper.mergeCollectionJoins(rows, metadata);
+                        return merged.isEmpty() ? Optional.empty() : Optional.of(merged.get(0));
+                    }
+                    final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
+                    return executor.client().sql(sql).param(id)
+                            .query((rs, _) -> {
+                                if (planRef[0] == null) {
+                                    // PERF: cache entity row plan per query execution.
+                                    planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
+                                }
+                                return EntityMapper.mapRow(rs, metadata, planRef[0]);
+                            })
+                            .optional();
+                };
 
-                return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, params,
-                        () -> {
-                            if (metadata.hasCollectionJoins()) {
-                                final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
-                                List<T> rows = executor.client().sql(sql).param(id)
-                                        .query((rs, _) -> {
-                                            if (planRef[0] == null) {
-                                                // PERF: cache entity row plan per query execution.
-                                                planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
-                                            }
-                                            return EntityMapper.mapRow(rs, metadata, planRef[0]);
-                                        })
-                                        .list();
-                                List<T> merged = EntityMapper.mergeCollectionJoins(rows, metadata);
-                                return merged.isEmpty() ? Optional.empty() : Optional.of(merged.get(0));
-                            }
-                            final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
-                            return executor.client().sql(sql).param(id)
-                                    .query((rs, _) -> {
-                                        if (planRef[0] == null) {
-                                            // PERF: cache entity row plan per query execution.
-                                            planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
-                                        }
-                                        return EntityMapper.mapRow(rs, metadata, planRef[0]);
-                                    })
-                                    .optional();
-                        });
+                if (!ormLogger.isDebugEnabled()) {
+                    return action.get();
+                }
+                final List<Object> params = List.of(id);
+                return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, params, action);
             } finally {
                 if (latencyRecorder != null) {
                     latencyRecorder.record("findById", System.nanoTime() - startNanos);
@@ -598,40 +601,83 @@ public class OrmManager implements OrmOperations {
         return withModule(metadata, () -> {
             long startNanos = System.nanoTime();
             try {
-                String sql = metadata.selectSql();
-                if (mainAlias != null && !mainAlias.isBlank()) {
-                    sql = normalizeMainTableAlias(sql, mainAlias, metadata);
+                boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
+                String sql;
+                if (hasJoins) {
+                    sql = metadata.selectSql();
+                    if (mainAlias != null && !mainAlias.isBlank()) {
+                        sql = normalizeMainTableAlias(sql, mainAlias, metadata);
+                    }
+                    sql += SqlConstants.WHERE + (mainAlias != null && !mainAlias.isBlank() ? mainAlias + "." : "") + metadata.idColumnName() + " = ?";
+                } else {
+                    sql = metadata.idSelectSql(mainAlias);
                 }
-                sql += SqlConstants.WHERE + (mainAlias != null && !mainAlias.isBlank() ? mainAlias + "." : "") + metadata.idColumnName() + " = ?";
                 final String finalSql = sql;
-                final List<Object> params = List.of(id);
+                final java.util.function.Supplier<Optional<T>> action = () -> {
+                    if (metadata.hasCollectionJoins()) {
+                        // PERF: drain RS directly — avoids N-entity intermediate list (Gap 2 fix).
+                        List<T> merged = executor.client().sql(finalSql).param(id)
+                                .query(rs -> {
+                                    try {
+                                        return EntityMapper.drainAndMergeCollectionJoins(rs, metadata);
+                                    } catch (java.sql.SQLException e) {
+                                        throw new RuntimeException(e);
+                                    }
+                                });
+                        return merged.isEmpty() ? Optional.empty() : Optional.of(merged.get(0));
+                    }
+                    final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
+                    return executor.client().sql(finalSql).param(id)
+                            .query((rs, _) -> {
+                                if (planRef[0] == null) {
+                                    // PERF: cache entity row plan per query execution.
+                                    planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
+                                }
+                                return EntityMapper.mapRow(rs, metadata, planRef[0]);
+                            })
+                            .optional();
+                };
 
-                Optional<T> result = ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, finalSql, params,
-                        () -> {
-                            if (metadata.hasCollectionJoins()) {
-                                // PERF: drain RS directly — avoids N-entity intermediate list (Gap 2 fix).
-                                List<T> merged = executor.client().sql(finalSql).params(params)
-                                        .query(rs -> {
-                                            try {
-                                                return EntityMapper.drainAndMergeCollectionJoins(rs, metadata);
-                                            } catch (java.sql.SQLException e) {
-                                                throw new RuntimeException(e);
-                                            }
-                                        });
-                                return merged.isEmpty() ? Optional.empty() : Optional.of(merged.get(0));
-                            }
-                            final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
-                            return executor.client().sql(finalSql).param(id)
-                                    .query((rs, _) -> {
-                                        if (planRef[0] == null) {
-                                            // PERF: cache entity row plan per query execution.
-                                            planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
-                                        }
-                                        return EntityMapper.mapRow(rs, metadata, planRef[0]);
-                                    })
-                                    .optional();
-                        });
-                return result;
+                if (!ormLogger.isDebugEnabled()) {
+                    return action.get();
+                }
+                final List<Object> params = List.of(id);
+                return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, finalSql, params, action);
+            } finally {
+                if (latencyRecorder != null) {
+                    latencyRecorder.record("findById", System.nanoTime() - startNanos);
+                }
+            }
+        });
+    }
+
+    @Override
+    public <T> List<T> findByIdAsList(Class<T> clazz, Object id, String mainAlias) {
+        final EntityMetadata<T> metadata = getRequiredMetadata(clazz);
+        return withModule(metadata, () -> {
+            long startNanos = System.nanoTime();
+            try {
+                boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
+                if (hasJoins || metadata.hasCollectionJoins()) {
+                    return findById(clazz, id, mainAlias).map(List::of).orElseGet(List::of);
+                }
+
+                final String sql = metadata.idSelectSql(mainAlias);
+                final java.util.function.Supplier<List<T>> action = () -> {
+                    final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
+                    return executor.client().sql(sql).param(id)
+                            .query((rs, _) -> {
+                                if (planRef[0] == null) {
+                                    planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
+                                }
+                                return EntityMapper.mapRow(rs, metadata, planRef[0]);
+                            })
+                            .list();
+                };
+                if (!ormLogger.isDebugEnabled()) {
+                    return action.get();
+                }
+                return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, List.of(id), action);
             } finally {
                 if (latencyRecorder != null) {
                     latencyRecorder.record("findById", System.nanoTime() - startNanos);

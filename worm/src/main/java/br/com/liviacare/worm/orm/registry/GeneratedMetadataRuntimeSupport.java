@@ -130,7 +130,20 @@ public final class GeneratedMetadataRuntimeSupport {
             ConverterRegistry converterRegistry,
             EntityOptions options
     ) {
-        return buildMetadataInternal(entityClass, tableName, descriptors, joins, dialect, converterRegistry, options);
+        return buildEntityMetadata(entityClass, tableName, descriptors, joins, dialect, converterRegistry, options, null);
+    }
+
+    public static <T> EntityMetadata<T> buildEntityMetadata(
+            Class<T> entityClass,
+            String tableName,
+            PropertyDescriptor[] descriptors,
+            JoinDescriptor[] joins,
+            SqlDialect dialect,
+            ConverterRegistry converterRegistry,
+            EntityOptions options,
+            String idSelectSql
+    ) {
+        return buildMetadataInternal(entityClass, tableName, descriptors, joins, dialect, converterRegistry, options, idSelectSql);
     }
 
     public static <T> EntityMetadata<T> buildSimpleEntityMetadata(
@@ -141,7 +154,19 @@ public final class GeneratedMetadataRuntimeSupport {
             ConverterRegistry converterRegistry,
             EntityOptions options
     ) {
-        return buildMetadataInternal(entityClass, tableName, descriptors, new JoinDescriptor[0], dialect, converterRegistry, options);
+        return buildSimpleEntityMetadata(entityClass, tableName, descriptors, dialect, converterRegistry, options, null);
+    }
+
+    public static <T> EntityMetadata<T> buildSimpleEntityMetadata(
+            Class<T> entityClass,
+            String tableName,
+            PropertyDescriptor[] descriptors,
+            SqlDialect dialect,
+            ConverterRegistry converterRegistry,
+            EntityOptions options,
+            String idSelectSql
+    ) {
+        return buildMetadataInternal(entityClass, tableName, descriptors, new JoinDescriptor[0], dialect, converterRegistry, options, idSelectSql);
     }
 
     private static <T> EntityMetadata<T> buildMetadataInternal(
@@ -151,7 +176,8 @@ public final class GeneratedMetadataRuntimeSupport {
             JoinDescriptor[] joins,
             SqlDialect dialect,
             ConverterRegistry converterRegistry,
-            EntityOptions options
+            EntityOptions options,
+            String idSelectSql
     ) {
         try {
             MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(entityClass, MethodHandles.lookup());
@@ -339,6 +365,9 @@ public final class GeneratedMetadataRuntimeSupport {
             b.updateWritePlan = updateWritePlan;
             b.binder = findBinderForEntity(entityClass);
             b.selectSql = buildSelectSql(tableName, descriptors, normalizedJoins, mainAlias);
+            b.idSelectSql = idSelectSql != null && !idSelectSql.isBlank()
+                    ? idSelectSql
+                    : buildIdSelectSql(tableName, idColumn);
             b.countSql = "SELECT COUNT(*) FROM " + tableName;
             b.insertSql = buildInsertSql(tableName, insertableColumns);
             b.updateSql = buildUpdateSql(tableName, idColumn, updatableColumns, options.versionColumn());
@@ -378,6 +407,11 @@ public final class GeneratedMetadataRuntimeSupport {
             return raw -> converterRegistry.fromDatabase(raw, propertyType);
         }
         return ConverterFactory.getConverter(propertyType, genericType);
+    }
+
+    private static String buildIdSelectSql(String tableName, String idColumn) {
+        String alias = AliasUtils.defaultMainAlias(tableName);
+        return "SELECT " + alias + ".* FROM " + tableName + " " + alias + " WHERE " + alias + "." + idColumn + " = ?";
     }
 
     private static String buildSelectSql(String table, PropertyDescriptor[] descriptors, JoinDescriptor[] joins, String mainAlias) {
@@ -627,4 +661,3 @@ public final class GeneratedMetadataRuntimeSupport {
         throw new IllegalStateException("No generated descriptor index found for column '" + column + "'");
     }
 }
-

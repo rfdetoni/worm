@@ -265,6 +265,9 @@ public final class WormEntityProcessor extends AbstractProcessor {
         List<JoinDescriptorModel> joins = collectToOneJoinDescriptors(entityType);
         boolean supportsStaticPath = supportsStaticGeneration(entityType, properties, joins);
         EntityOptionsModel options = resolveEntityOptions(properties, module, tracked);
+        String idColumn = resolveIdColumn(properties);
+        String defaultAlias = AliasUtils.defaultMainAlias(tableName);
+        String idSelectSql = "SELECT " + defaultAlias + ".* FROM " + tableName + " " + defaultAlias + " WHERE " + defaultAlias + "." + idColumn + " = ?";
 
         JavaFileObject file = filer.createSourceFile(generatedQualifiedName, entityType);
         try (Writer writer = file.openWriter()) {
@@ -328,6 +331,7 @@ public final class WormEntityProcessor extends AbstractProcessor {
                     writer.write(i < joins.size() - 1 ? ",\n" : "\n");
                 }
                 writer.write("    };\n\n");
+                writer.write("    private static final String ID_SELECT_SQL = \"" + escapeJava(idSelectSql) + "\";\n\n");
             }
 
             writer.write("    @Override\n");
@@ -344,7 +348,8 @@ public final class WormEntityProcessor extends AbstractProcessor {
                 writer.write("                JOINS,\n");
                 writer.write("                dialect,\n");
                 writer.write("                converterRegistry,\n");
-                writer.write("                OPTIONS\n");
+                writer.write("                OPTIONS,\n");
+                writer.write("                ID_SELECT_SQL\n");
                 writer.write("        );\n");
             } else {
                 writer.write("        return EntityMetadata.of(" + entityQualifiedName + ".class, dialect, converterRegistry);\n");
@@ -627,6 +632,19 @@ public final class WormEntityProcessor extends AbstractProcessor {
                 activeColumn, activeDefaultValue, deletedAtColumn, versionColumn);
     }
 
+    private static String resolveIdColumn(List<PropertyDescriptorModel> properties) {
+        for (PropertyDescriptorModel property : properties) {
+            if (property.id) {
+                return property.columnName;
+            }
+        }
+        return "id";
+    }
+
+    private static String escapeJava(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
     private String classLiteralType(TypeMirror type) {
         if (type.getKind().isPrimitive()) {
             return type.toString();
@@ -712,4 +730,3 @@ public final class WormEntityProcessor extends AbstractProcessor {
         return local.replace('.', '_');
     }
 }
-

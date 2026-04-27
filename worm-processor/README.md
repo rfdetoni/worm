@@ -7,6 +7,12 @@ This module contains the first Annotation Processing Tool (APT) scaffold for WOR
 - Scans `@DbTable` entities at compile time.
 - Generates one metadata factory per entity implementing:
   - `br.com.liviacare.worm.orm.registry.GeneratedEntityMetadataFactory<T>`
+ - Generates static metamodel companions (`{Entity}_`) with `WormAttribute` descriptors.
+- Generates WORM-native query path companions (`W{Entity}`), for example:
+  - `WUser`
+  - `WOrder`
+  - `WBook`
+  - with typed path fields (`StringPath`, `NumberPath`, `BooleanPath`, `UuidPath`, `EnumPath`, `DatePath`, `DateTimePath`, `ComparablePath`)
 - Generates a service file so runtime discovery can happen through `ServiceLoader`.
 - The generated factory currently delegates to `EntityMetadata.of(...)`.
 
@@ -33,4 +39,3 @@ Generated sources are emitted by Maven under the standard annotation processing 
 - Emit fully static metadata assembly (no reflection in generated `create(...)`).
 - Generate direct row mappers per entity.
 - Add compile-time validation diagnostics for missing/ambiguous joins.
-

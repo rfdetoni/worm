@@ -3,6 +3,7 @@ package br.com.liviacare.worm.orm.registry;
 import br.com.liviacare.worm.orm.mapping.ColumnConverter;
 import br.com.liviacare.worm.orm.mapping.EntityBinder;
 import br.com.liviacare.worm.orm.sql.WritePlan;
+import br.com.liviacare.worm.util.AliasUtils;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.reflect.Type;
@@ -56,6 +57,7 @@ public final class EntityMetadata<T> {
 
     // ── Pre-built SQL strings ────────────────────────────────────────────────
     private final String selectSql;
+    private final String idSelectSql;
     private final String countSql;
     private final String insertSql;
     private final String updateSql;
@@ -123,6 +125,12 @@ public final class EntityMetadata<T> {
         this.updateWritePlan    = b.updateWritePlan;
         this.binder             = b.binder;
         this.selectSql          = b.selectSql;
+        if (b.idSelectSql != null) {
+            this.idSelectSql = b.idSelectSql;
+        } else {
+            String alias = AliasUtils.defaultMainAlias(b.tableName);
+            this.idSelectSql = "SELECT " + alias + ".* FROM " + b.tableName + " " + alias + " WHERE " + alias + "." + b.idColumnName + " = ?";
+        }
         this.countSql           = b.countSql;
         this.insertSql          = b.insertSql;
         this.updateSql          = b.updateSql;
@@ -200,6 +208,17 @@ public final class EntityMetadata<T> {
     public WritePlan         updateWritePlan()     { return updateWritePlan; }
     public EntityBinder<T>   binder()              { return binder; }
     public String            selectSql()           { return selectSql; }
+    public String            idSelectSql()         { return idSelectSql; }
+    public String            idSelectSql(String alias) {
+        if (alias == null || alias.isBlank()) {
+            return idSelectSql;
+        }
+        String defaultAlias = AliasUtils.defaultMainAlias(tableName);
+        if (defaultAlias.equals(alias)) {
+            return idSelectSql;
+        }
+        return "SELECT " + alias + ".* FROM " + tableName + " " + alias + " WHERE " + alias + "." + idColumnName + " = ?";
+    }
     public String            countSql()            { return countSql; }
     public String            insertSql()           { return insertSql; }
     public String            updateSql()           { return updateSql; }
@@ -274,7 +293,7 @@ public final class EntityMetadata<T> {
         Class<T> entityClass;
         boolean isRecord;
         String tableName, idColumnName, selectSql, countSql, insertSql,
-                updateSql, upsertSql, deleteSql, softDeleteSql;
+                idSelectSql, updateSql, upsertSql, deleteSql, softDeleteSql;
         String activeColumn, deletedAtColumn, versionColumn, defaultOrderBy;
         String module; // from @DbTable(module = "...")
         boolean hasActive, hasDeletedAt, hasVersion;

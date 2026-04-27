@@ -540,6 +540,8 @@ final class MetadataBuilder<T> {
         boolean tracked = entityClass.isAnnotationPresent(br.com.liviacare.worm.annotation.mapping.Track.class);
 
         String selectSql   = buildSelectSql(joinClauses);
+        String idSelectSql = "SELECT " + mainAlias + ".* FROM " + tableName + " " + mainAlias
+                + SqlConstants.WHERE + mainAlias + "." + idColumnName + " = " + SqlConstants.PLACEHOLDER;
         String countSql    = SqlConstants.SELECT_COUNT_STAR_FROM + tableName;
         String insertSql   = buildInsertSql();
         Optional<String> versionCol = versionField.map(f -> resolveColumnName(f));
@@ -638,6 +640,7 @@ final class MetadataBuilder<T> {
         b.updateWritePlan    = updateWritePlan;
         b.binder             = GeneratedMetadataRuntimeSupport.findBinderForEntity(entityClass);
         b.selectSql          = selectSql;
+        b.idSelectSql        = idSelectSql;
         b.countSql           = countSql;
         b.insertSql          = insertSql;
         b.updateSql          = updateSql;
