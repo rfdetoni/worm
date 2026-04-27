@@ -13,6 +13,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 final class ConverterFactory {
     private static final ObjectMapper MAPPER =
@@ -23,6 +24,7 @@ final class ConverterFactory {
         if (target == LocalDate.class)     return localDateConverter();
         if (target == LocalDateTime.class) return localDateTimeConverter();
         if (target == Instant.class)       return instantConverter();
+        if (target == UUID.class)          return uuidConverter();
         if (target.isEnum())               return enumConverter(target);
         if (isJsonCandidate(target))       return jsonConverter(target, genericType);
         return raw -> raw;
@@ -66,6 +68,17 @@ final class ConverterFactory {
                 case Date d       -> d.toInstant();
                 default           -> raw;
             };
+        };
+    }
+
+    private static ColumnConverter uuidConverter() {
+        return raw -> {
+            if (raw == null) return null;
+            if (raw instanceof UUID uuid) return uuid;
+            if (raw instanceof byte[] bytes) {
+                return UUID.fromString(new String(bytes));
+            }
+            return UUID.fromString(raw.toString());
         };
     }
 

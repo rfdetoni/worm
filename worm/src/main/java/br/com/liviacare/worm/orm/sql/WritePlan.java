@@ -164,7 +164,7 @@ public record WritePlan(
                         yield (d.forceFallback() || raw == null) ? d.fallback() : raw;
                     }
                 };
-                spec = spec.param(val);
+                spec = spec.param(JdbcParameterNormalizer.normalize(val));
             }
             return spec;
         };
@@ -177,9 +177,9 @@ public record WritePlan(
     private static Object resolveField(Slot.Field f, Object entity) throws Throwable {
         final Object raw = f.getter().invoke(entity);
         if (raw == null) return null;
-        if (f.isEnum()) return ((Enum<?>) raw).name();
+        if (f.isEnum()) return JdbcParameterNormalizer.normalize(raw);
         if (f.json()) return toJsonb(raw);
-        return raw;
+        return JdbcParameterNormalizer.normalize(raw);
     }
 
     private static Object toJsonb(Object val) {
@@ -207,4 +207,3 @@ public record WritePlan(
         return 0; // unreachable
     }
 }
-

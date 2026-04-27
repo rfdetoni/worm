@@ -14,7 +14,7 @@
     <packaging>pom</packaging>
     <name>WORM Parent</name>
     <description>Parent POM for WORM multi-module build</description>
-    <url>https://github.com/liviacare/worm</url>
+    <url>https://github.com/rfdetoni/worm</url>
     <licenses>
         <license>
             <name>MIT License</name>
@@ -23,8 +23,8 @@
     </licenses>
     <developers>
         <developer>
-            <name>Livia Care</name>
-            <email>dev@liviacare.com</email>
+            <name>RfdeToni</name>
+            <email>rodrigoftoni@gmail.com</email>
         </developer>
     </developers>
     <scm>

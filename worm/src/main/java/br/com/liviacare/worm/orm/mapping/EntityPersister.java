@@ -1,6 +1,7 @@
 package br.com.liviacare.worm.orm.mapping;
 
 import br.com.liviacare.worm.orm.registry.EntityMetadata;
+import br.com.liviacare.worm.orm.sql.JdbcParameterNormalizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.postgresql.util.PGobject;
@@ -61,7 +62,7 @@ public final class EntityPersister {
             if (column.equals(idCol)) {
                 try {
                     // PERF: fill caller-owned buffer in place to avoid per-entity array allocation.
-                    buffer[out++] = metadata.idGetter().invoke(entity);
+                    buffer[out++] = JdbcParameterNormalizer.normalize(metadata.idGetter().invoke(entity));
                 } catch (Throwable e) {
                     throw new IllegalStateException("Failed to read ID column '" + column + "' from entity", e);
                 }
@@ -139,10 +140,10 @@ public final class EntityPersister {
                 throw new IllegalStateException("Failed to read column '" + column + "' from entity", e);
             }
         }
-        buffer[out++] = id;
+        buffer[out++] = JdbcParameterNormalizer.normalize(id);
         if (metadata.hasVersion()) {
             try {
-                buffer[out++] = metadata.versionGetter().invoke(entity);
+                buffer[out++] = JdbcParameterNormalizer.normalize(metadata.versionGetter().invoke(entity));
             } catch (Throwable e) {
                 throw new IllegalStateException("Failed to read version value from entity", e);
             }
@@ -194,7 +195,7 @@ public final class EntityPersister {
         values.add(id);
         if (metadata.hasVersion()) {
             try {
-                values.add(metadata.versionGetter().invoke(entity));
+                values.add(JdbcParameterNormalizer.normalize(metadata.versionGetter().invoke(entity)));
             } catch (Throwable e) {
                 throw new IllegalStateException("Failed to read version value from entity", e);
             }
@@ -207,7 +208,7 @@ public final class EntityPersister {
         Class<?> type = metadata.selectTypes()[idx];
         
         if (type.isEnum()) {
-            return ((Enum<?>) val).name();
+            return JdbcParameterNormalizer.normalize(val);
         }
 
         if (metadata.isJsonColumn(column) || isJsonCandidate(type)) {
@@ -220,7 +221,7 @@ public final class EntityPersister {
                 throw new RuntimeException("Failed to serialize field to JSONB", e);
             }
         }
-        return val;
+        return JdbcParameterNormalizer.normalize(val);
     }
 
     private static Object mapAuditValue(Instant now, EntityMetadata<?> metadata, String column) {

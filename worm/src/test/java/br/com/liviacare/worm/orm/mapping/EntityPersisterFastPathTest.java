@@ -7,6 +7,7 @@ import br.com.liviacare.worm.annotation.mapping.DbColumn;
 import br.com.liviacare.worm.annotation.mapping.DbId;
 import br.com.liviacare.worm.annotation.mapping.DbTable;
 import br.com.liviacare.worm.annotation.mapping.DbVersion;
+import br.com.liviacare.worm.orm.dialect.MySQLDialect;
 import br.com.liviacare.worm.api.iBaseEntity;
 import br.com.liviacare.worm.orm.dialect.PostgresDialect;
 import br.com.liviacare.worm.orm.dialect.SqlDialect;
@@ -20,6 +21,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -72,6 +74,13 @@ class EntityPersisterFastPathTest {
     @DbTable("json_entities")
     record JsonEntity(
             @DbId("id") Long id,
+            @DbColumn(value = "payload", json = true) Map<String, Object> payload
+    ) {
+    }
+
+    @DbTable("mysql_entities")
+    record MySqlEntity(
+            @DbId("id") UUID id,
             @DbColumn(value = "payload", json = true) Map<String, Object> payload
     ) {
     }
@@ -279,5 +288,30 @@ class EntityPersisterFastPathTest {
         assertEquals(1L, bound.get(0));
         assertInstanceOf(PGobject.class, bound.get(1));
     }
-}
 
+    @Test
+    void mysqlDialectNormalizesUuidAndSerializesJsonAsString() {
+        MySQLDialect dialect = new MySQLDialect();
+        EntityMetadata<MySqlEntity> metadata = EntityMetadata.of(MySqlEntity.class, dialect, null);
+
+        JdbcClient client = mock(JdbcClient.class);
+        JdbcClient.StatementSpec spec = mock(JdbcClient.StatementSpec.class);
+        when(client.sql(metadata.insertWritePlan().sql())).thenReturn(spec);
+        when(spec.param(any())).thenReturn(spec);
+        when(spec.update()).thenReturn(1);
+
+        List<Object> bound = new ArrayList<>();
+        when(spec.param(any())).thenAnswer(inv -> {
+            bound.add(inv.getArgument(0));
+            return spec;
+        });
+
+        UUID id = UUID.fromString("00000000-0000-7000-0000-000000000001");
+        MySqlEntity entity = new MySqlEntity(id, Map.of("vip", true));
+
+        assertEquals(1, metadata.insertWritePlan().execute(client, entity));
+        assertEquals(2, bound.size());
+        assertEquals(id.toString(), bound.get(0));
+        assertEquals("{\"vip\":true}", bound.get(1));
+    }
+}

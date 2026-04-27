@@ -12,6 +12,7 @@ import br.com.liviacare.worm.orm.dialect.SqlDialect;
 import br.com.liviacare.worm.orm.registry.EntityRegistry;
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -29,6 +30,22 @@ import javax.sql.DataSource;
 @Configuration
 @EnableConfigurationProperties(WormProperties.class)
 public class OrmAutoConfiguration {
+
+    @Bean
+    public static BeanPostProcessor sqlDialectEntityRegistryPostProcessor() {
+        return new BeanPostProcessor() {
+            @Override
+            public Object postProcessAfterInitialization(Object bean, String beanName) {
+                if (bean instanceof SqlDialect dialect) {
+                    try {
+                        EntityRegistry.setSqlDialect(dialect);
+                    } catch (Throwable ignored) {
+                    }
+                }
+                return bean;
+            }
+        };
+    }
 
     @Bean
     @ConditionalOnMissingBean(SqlDialect.class)

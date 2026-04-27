@@ -1,10 +1,20 @@
 package br.com.liviacare.worm.orm.dialect;
 
+import br.com.liviacare.worm.orm.mapping.ParamBinder;
 import br.com.liviacare.worm.orm.registry.EntityMetadata;
+import br.com.liviacare.worm.orm.sql.JdbcParameterNormalizer;
+import br.com.liviacare.worm.orm.sql.WritePlan;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 
 public class MySQLDialect implements SqlDialect {
+
+    private static final ObjectMapper MAPPER =
+            new ObjectMapper().registerModule(new JavaTimeModule());
 
     @Override
     public String applyPagination(String sql, int limit, int offset) {
@@ -54,5 +64,41 @@ public class MySQLDialect implements SqlDialect {
     @Override
     public String currentTimestampExpression() {
         return "CURRENT_TIMESTAMP()";
+    }
+
+    @Override
+    public ParamBinder createParamBinder(Class<?> entityClass, String sql, WritePlan.Slot[] slots, boolean hasVersion) {
+        if (slots == null || slots.length == 0) {
+            return null;
+        }
+        return (spec, entity) -> {
+            for (WritePlan.Slot slot : slots) {
+                Object value = switch (slot) {
+                    case WritePlan.Slot.Field field -> normalizeField(field, entity);
+                    case WritePlan.Slot.AuditNow auditNow -> auditNow.asLocalDateTime()
+                            ? java.time.LocalDateTime.now()
+                            : Timestamp.from(Instant.now());
+                    case WritePlan.Slot.ActiveDefault activeDefault -> {
+                        Object raw = activeDefault.getter().invoke(entity);
+                        yield JdbcParameterNormalizer.normalize(
+                                (activeDefault.forceFallback() || raw == null) ? activeDefault.fallback() : raw
+                        );
+                    }
+                };
+                spec = spec.param(value);
+            }
+            return spec;
+        };
+    }
+
+    private Object normalizeField(WritePlan.Slot.Field field, Object entity) throws Throwable {
+        Object raw = field.getter().invoke(entity);
+        if (raw == null) {
+            return null;
+        }
+        if (field.json()) {
+            return MAPPER.writeValueAsString(raw);
+        }
+        return JdbcParameterNormalizer.normalize(raw);
     }
 }
