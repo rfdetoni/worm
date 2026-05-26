@@ -86,7 +86,7 @@ WORM auto-configures itself when present on the classpath.
 If you prefer explicit opt-in:
 
 ```java
-import br.com.liviacare.worm.annotation.EnableWorm;
+import com.github.rfdetoni.worm.EnableWorm;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
@@ -1585,7 +1585,7 @@ The processor generates:
 
 ```java
 // Generated — do not edit
-@Generated("br.com.liviacare.worm.processor.WormMetamodelProcessor")
+@Generated("processor.com.github.rfdetoni.worm.WormMetamodelProcessor")
 public final class Order_ {
 
     private Order_() {}

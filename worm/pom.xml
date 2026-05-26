@@ -5,9 +5,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>br.com.liviacare</groupId>
+        <groupId>com.github.rfdetoni</groupId>
         <artifactId>worm-parent</artifactId>
-        <version>1.0.6</version>
+        <version>1.0.7</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -98,7 +98,7 @@
                     <archive>
                         <manifest>
                             <addClasspath>true</addClasspath>
-                            <mainClass>br.com.liviacare.worm.OrmManager</mainClass>
+                            <mainClass>com.github.rfdetoni.worm.OrmManager</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
@@ -148,12 +148,12 @@
                         <configuration>
                             <annotationProcessorPaths>
                                 <path>
-                                    <groupId>br.com.liviacare</groupId>
+                                    <groupId>com.github.rfdetoni</groupId>
                                     <artifactId>worm</artifactId>
                                     <version>${project.version}</version>
                                 </path>
                                 <path>
-                                    <groupId>br.com.liviacare</groupId>
+                                    <groupId>com.github.rfdetoni</groupId>
                                     <artifactId>worm-processor</artifactId>
                                     <version>${project.version}</version>
                                 </path>
@@ -166,4 +166,3 @@
     </profiles>
 
 </project>
-
