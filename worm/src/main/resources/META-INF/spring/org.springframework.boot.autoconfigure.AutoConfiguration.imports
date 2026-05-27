@@ -1,4 +1,4 @@
 com.github.rfdetoni.worm.config.OrmAutoConfiguration
 com.github.rfdetoni.worm.config.TransactionConfig
+com.github.rfdetoni.worm.config.WebMvcConfig
 com.github.rfdetoni.worm.config.query.QueryRepositoriesAutoConfiguration
-

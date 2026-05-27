@@ -2,6 +2,7 @@ package com.github.rfdetoni.worm.annotation;
 
 import com.github.rfdetoni.worm.config.OrmAutoConfiguration;
 import com.github.rfdetoni.worm.config.TransactionConfig;
+import com.github.rfdetoni.worm.config.WebMvcConfig;
 import com.github.rfdetoni.worm.config.query.QueryRepositoriesAutoConfiguration;
 import org.springframework.context.annotation.Import;
 
@@ -23,8 +24,8 @@ import java.lang.annotation.*;
 @Import({
         OrmAutoConfiguration.class,
         TransactionConfig.class,
+        WebMvcConfig.class,
         QueryRepositoriesAutoConfiguration.class
 })
 public @interface EnableWorm {
 }
-
