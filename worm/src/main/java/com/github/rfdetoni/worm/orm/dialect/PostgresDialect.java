@@ -3,6 +3,7 @@ package com.github.rfdetoni.worm.orm.dialect;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.github.rfdetoni.worm.orm.mapping.BulkWriter;
+import com.github.rfdetoni.worm.orm.mapping.GeneratedBinderSupport;
 import com.github.rfdetoni.worm.orm.mapping.ParamBinder;
 import com.github.rfdetoni.worm.orm.mapping.PostgresBulkWriter;
 import com.github.rfdetoni.worm.orm.registry.EntityMetadata;
@@ -130,6 +131,7 @@ public class PostgresDialect implements SqlDialect {
         return (spec, entity) -> {
             final Instant now = Instant.now();
             JdbcClient.StatementSpec current = spec;
+            int index = 1;
             for (int i = 0; i < ops.length; i++) {
                 Object value;
                 switch (ops[i]) {
@@ -155,7 +157,7 @@ public class PostgresDialect implements SqlDialect {
                     }
                     default -> throw new IllegalStateException("Unsupported Postgres binder opcode: " + ops[i]);
                 }
-                current = current.param(value);
+                current = GeneratedBinderSupport.bindPositional(current, index++, value);
             }
             return current;
         };

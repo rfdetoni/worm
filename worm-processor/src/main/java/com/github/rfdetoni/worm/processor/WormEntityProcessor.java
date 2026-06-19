@@ -157,8 +157,9 @@ public final class WormEntityProcessor extends AbstractProcessor {
             if (baseEntity) {
                 writer.write("        entity.created();\n");
             }
+            writer.write("        int index = 1;\n");
             for (BoundPropertyModel property : boundProperties) {
-                writer.write("        spec = spec.param(" + bindingExpression(property) + ");\n");
+                writer.write("        spec = com.github.rfdetoni.worm.orm.mapping.GeneratedBinderSupport.bindPositional(spec, index++, " + bindingExpression(property) + ");\n");
             }
             writer.write("    }\n\n");
 
@@ -167,12 +168,13 @@ public final class WormEntityProcessor extends AbstractProcessor {
             if (baseEntity) {
                 writer.write("        entity.updated();\n");
             }
+            writer.write("        int index = 1;\n");
             for (BoundPropertyModel property : boundProperties) {
                 PropertyDescriptorModel p = property.property;
                 if (p.id || p.createdAt || p.createdBy || p.version) {
                     continue;
                 }
-                writer.write("        spec = spec.param(" + bindingExpression(property) + ");\n");
+                writer.write("        spec = com.github.rfdetoni.worm.orm.mapping.GeneratedBinderSupport.bindPositional(spec, index++, " + bindingExpression(property) + ");\n");
             }
             BoundPropertyModel idBound = null;
             for (BoundPropertyModel property : boundProperties) {
@@ -182,7 +184,7 @@ public final class WormEntityProcessor extends AbstractProcessor {
                 }
             }
             if (idBound != null) {
-                writer.write("        spec = spec.param(" + bindingExpression(idBound) + ");\n");
+                writer.write("        spec = com.github.rfdetoni.worm.orm.mapping.GeneratedBinderSupport.bindPositional(spec, index++, " + bindingExpression(idBound) + ");\n");
             }
             PropertyDescriptorModel versionProperty = null;
             for (PropertyDescriptorModel property : properties) {
@@ -194,7 +196,7 @@ public final class WormEntityProcessor extends AbstractProcessor {
             if (versionProperty != null) {
                 for (BoundPropertyModel property : boundProperties) {
                     if (property.property.version) {
-                        writer.write("        spec = spec.param(" + bindingExpression(property) + ");\n");
+                        writer.write("        spec = com.github.rfdetoni.worm.orm.mapping.GeneratedBinderSupport.bindPositional(spec, index++, " + bindingExpression(property) + ");\n");
                         break;
                     }
                 }
@@ -249,6 +251,9 @@ public final class WormEntityProcessor extends AbstractProcessor {
                 return Boolean.toString(p.activeDefaultValue);
             }
             return access + " == null ? " + p.activeDefaultValue + " : " + access;
+        }
+        if (p.json || p.enumType) {
+            return "com.github.rfdetoni.worm.orm.mapping.GeneratedBinderSupport.prepare(" + access + ", " + p.json + ", " + p.enumType + ")";
         }
         if (p.typeLiteral.endsWith("[]")) {
             return access;
@@ -412,7 +417,9 @@ public final class WormEntityProcessor extends AbstractProcessor {
             String label = column;
             String typeLiteral = classLiteralType(field.asType());
             boolean primitive = field.asType().getKind().isPrimitive();
+            boolean enumType = isEnumType(field.asType());
             Active active = field.getAnnotation(Active.class);
+            boolean json = dbColumn != null && dbColumn.json();
 
             TypeElement activeRecordType = elements.getTypeElement("com.github.rfdetoni.worm.ActiveRecord");
             boolean isActiveRecord = activeRecordType != null && types.isAssignable(entityType.asType(), activeRecordType.asType());
@@ -433,10 +440,20 @@ public final class WormEntityProcessor extends AbstractProcessor {
                     active != null,
                     field.getAnnotation(DeletedAt.class) != null,
                     field.getAnnotation(DbVersion.class) != null,
-                    active == null || active.defaultValue()
+                    active == null || active.defaultValue(),
+                    json,
+                    enumType
             ));
         }
         return out;
+    }
+
+    private boolean isEnumType(TypeMirror tm) {
+        if (!(tm instanceof DeclaredType dt)) {
+            return false;
+        }
+        Element e = dt.asElement();
+        return e != null && e.getKind() == ElementKind.ENUM;
     }
 
     /**
@@ -703,7 +720,9 @@ public final class WormEntityProcessor extends AbstractProcessor {
             boolean active,
             boolean deletedAt,
             boolean version,
-            boolean activeDefaultValue
+            boolean activeDefaultValue,
+            boolean json,
+            boolean enumType
     ) {
     }
 

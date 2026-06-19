@@ -2,6 +2,7 @@ package com.github.rfdetoni.worm.repository;
 
 import com.github.rfdetoni.worm.orm.OrmOperations;
 import com.github.rfdetoni.worm.orm.mapping.EntityPersister;
+import com.github.rfdetoni.worm.orm.mapping.GeneratedBinderSupport;
 import com.github.rfdetoni.worm.orm.registry.EntityMetadata;
 import com.github.rfdetoni.worm.orm.registry.EntityRegistry;
 import com.github.rfdetoni.worm.orm.sql.SqlConstants;
@@ -119,7 +120,7 @@ public class GenericRepository<T, ID> implements LjfRepository<T, ID>, Repositor
             public void setValues(PreparedStatement ps, int i) throws SQLException {
                 Object[] params = batch.get(i);
                 for (int j = 0; j < params.length; j++) {
-                    ps.setObject(j + 1, params[j]);
+                    GeneratedBinderSupport.bindPreparedStatement(ps, j + 1, params[j]);
                 }
             }
 

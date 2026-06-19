@@ -18,12 +18,14 @@ import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
 
 class EntityPersisterFastPathTest {
@@ -187,6 +189,10 @@ class EntityPersisterFastPathTest {
         when(client.sql(metadata.updateWritePlan().sql())).thenReturn(updateSpec);
         when(insertSpec.param(any())).thenReturn(insertSpec);
         when(updateSpec.param(any())).thenReturn(updateSpec);
+        when(insertSpec.param(anyInt(), any())).thenReturn(insertSpec);
+        when(updateSpec.param(anyInt(), any())).thenReturn(updateSpec);
+        when(insertSpec.param(anyInt(), any(), anyInt())).thenReturn(insertSpec);
+        when(updateSpec.param(anyInt(), any(), anyInt())).thenReturn(updateSpec);
         when(insertSpec.update()).thenReturn(1);
         when(updateSpec.update()).thenReturn(1);
 
@@ -200,6 +206,22 @@ class EntityPersisterFastPathTest {
             updateBound.add(inv.getArgument(0));
             return updateSpec;
         });
+        when(insertSpec.param(anyInt(), any())).thenAnswer(inv -> {
+            insertBound.add(inv.getArgument(1));
+            return insertSpec;
+        });
+        when(updateSpec.param(anyInt(), any())).thenAnswer(inv -> {
+            updateBound.add(inv.getArgument(1));
+            return updateSpec;
+        });
+        when(insertSpec.param(anyInt(), any(), anyInt())).thenAnswer(inv -> {
+            insertBound.add(inv.getArgument(1));
+            return insertSpec;
+        });
+        when(updateSpec.param(anyInt(), any(), anyInt())).thenAnswer(inv -> {
+            updateBound.add(inv.getArgument(1));
+            return updateSpec;
+        });
 
         assertNotNull(metadata.insertWritePlan());
         assertNotNull(metadata.updateWritePlan());
@@ -209,8 +231,8 @@ class EntityPersisterFastPathTest {
         assertEquals(6, insertBound.size());
         assertEquals(42L, insertBound.get(0));
         assertEquals("Carol", insertBound.get(1));
-        assertInstanceOf(Instant.class, insertBound.get(2));
-        assertInstanceOf(Instant.class, insertBound.get(3));
+        assertInstanceOf(OffsetDateTime.class, insertBound.get(2));
+        assertInstanceOf(OffsetDateTime.class, insertBound.get(3));
         assertEquals(true, insertBound.get(4));
         assertEquals(5, insertBound.get(5));
 
@@ -218,7 +240,7 @@ class EntityPersisterFastPathTest {
         assertTrue(AuditedEntity.updatedCalled);
         assertEquals(5, updateBound.size());
         assertEquals("Carol", updateBound.get(0));
-        assertInstanceOf(Instant.class, updateBound.get(1));
+        assertInstanceOf(OffsetDateTime.class, updateBound.get(1));
         assertNull(updateBound.get(2));
         assertEquals(42L, updateBound.get(3));
         assertEquals(5, updateBound.get(4));
@@ -236,11 +258,21 @@ class EntityPersisterFastPathTest {
         JdbcClient.StatementSpec spec = mock(JdbcClient.StatementSpec.class);
         when(client.sql(metadata.insertWritePlan().sql())).thenReturn(spec);
         when(spec.param(any())).thenReturn(spec);
+        when(spec.param(anyInt(), any())).thenReturn(spec);
+        when(spec.param(anyInt(), any(), anyInt())).thenReturn(spec);
         when(spec.update()).thenReturn(1);
 
         List<Object> bound = new ArrayList<>();
         when(spec.param(any())).thenAnswer(inv -> {
             bound.add(inv.getArgument(0));
+            return spec;
+        });
+        when(spec.param(anyInt(), any())).thenAnswer(inv -> {
+            bound.add(inv.getArgument(1));
+            return spec;
+        });
+        when(spec.param(anyInt(), any(), anyInt())).thenAnswer(inv -> {
+            bound.add(inv.getArgument(1));
             return spec;
         });
 
@@ -266,11 +298,21 @@ class EntityPersisterFastPathTest {
         JdbcClient.StatementSpec spec = mock(JdbcClient.StatementSpec.class);
         when(client.sql(metadata.insertWritePlan().sql())).thenReturn(spec);
         when(spec.param(any())).thenReturn(spec);
+        when(spec.param(anyInt(), any())).thenReturn(spec);
+        when(spec.param(anyInt(), any(), anyInt())).thenReturn(spec);
         when(spec.update()).thenReturn(1);
 
         List<Object> bound = new ArrayList<>();
         when(spec.param(any())).thenAnswer(inv -> {
             bound.add(inv.getArgument(0));
+            return spec;
+        });
+        when(spec.param(anyInt(), any())).thenAnswer(inv -> {
+            bound.add(inv.getArgument(1));
+            return spec;
+        });
+        when(spec.param(anyInt(), any(), anyInt())).thenAnswer(inv -> {
+            bound.add(inv.getArgument(1));
             return spec;
         });
 
@@ -281,4 +323,3 @@ class EntityPersisterFastPathTest {
         assertInstanceOf(PGobject.class, bound.get(1));
     }
 }
-

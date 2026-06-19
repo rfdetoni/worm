@@ -1,5 +1,6 @@
 package com.github.rfdetoni.worm.orm.sql;
 
+import com.github.rfdetoni.worm.orm.mapping.GeneratedBinderSupport;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -7,6 +8,7 @@ import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.util.ClassUtils;
@@ -123,7 +125,20 @@ public final class SqlExecutor {
                 throw new IllegalStateException("Batch execution requires a resolvable DataSource");
             }
 
-            return getOrCreateJdbcTemplate(ds).batchUpdate(sql, batchParams);
+            return getOrCreateJdbcTemplate(ds).batchUpdate(sql, new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
+                    Object[] params = batchParams.get(i);
+                    for (int j = 0; j < params.length; j++) {
+                        GeneratedBinderSupport.bindPreparedStatement(ps, j + 1, params[j]);
+                    }
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return batchParams.size();
+                }
+            });
         } catch (Throwable t) {
             throw new RuntimeException("Batch execution failed", t);
         }

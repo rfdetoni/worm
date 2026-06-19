@@ -2,6 +2,7 @@ package com.github.rfdetoni.worm.orm.sql;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.github.rfdetoni.worm.orm.mapping.GeneratedBinderSupport;
 import com.github.rfdetoni.worm.orm.mapping.ParamBinder;
 import org.postgresql.util.PGobject;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -153,6 +154,7 @@ public record WritePlan(
     private static ParamBinder compileBinder(Slot[] slots) {
         return (spec, entity) -> {
             final Instant now = Instant.now();
+            int index = 1;
             for (Slot slot : slots) {
                 final Object val = switch (slot) {
                     case Slot.Field f -> resolveField(f, entity);
@@ -164,7 +166,7 @@ public record WritePlan(
                         yield (d.forceFallback() || raw == null) ? d.fallback() : raw;
                     }
                 };
-                spec = spec.param(val);
+                spec = GeneratedBinderSupport.bindPositional(spec, index++, val);
             }
             return spec;
         };
@@ -207,4 +209,3 @@ public record WritePlan(
         return 0; // unreachable
     }
 }
-

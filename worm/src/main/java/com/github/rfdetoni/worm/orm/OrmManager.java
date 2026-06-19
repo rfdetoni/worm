@@ -153,9 +153,9 @@ public class OrmManager implements OrmOperations {
                             : EntityPersister.insertValues(entity, metadata);
                     if (ormLogger.isDebugEnabled()) {
                         ormLogger.logAndExecute(SqlConstants.OP_INSERT, sql, params,
-                                () -> executor.client().sql(sql).params(params).update());
+                                () -> executeJdbcUpdate(sql, params));
                     } else {
-                        executor.client().sql(sql).params(params).update();
+                        executeJdbcUpdate(sql, params);
                     }
                 });
                 attachSnapshot(entity, metadata);
@@ -179,9 +179,9 @@ public class OrmManager implements OrmOperations {
                                     : EntityPersister.updateValues(entity, metadata, capturedId);
                             if (ormLogger.isDebugEnabled()) {
                                 rows = ormLogger.logAndExecute(SqlConstants.OP_UPDATE, updateSql, updateParams,
-                                        () -> executor.client().sql(updateSql).params(updateParams).update());
+                                        () -> executeJdbcUpdate(updateSql, updateParams));
                             } else {
-                                rows = executor.client().sql(updateSql).params(updateParams).update();
+                                rows = executeJdbcUpdate(updateSql, updateParams);
                             }
                         }
                         if (rows > 0) {
@@ -200,9 +200,9 @@ public class OrmManager implements OrmOperations {
                                     : EntityPersister.insertValues(entity, metadata);
                             if (ormLogger.isDebugEnabled()) {
                                 ormLogger.logAndExecute(SqlConstants.OP_INSERT, insertSql, insertParams,
-                                        () -> executor.client().sql(insertSql).params(insertParams).update());
+                                        () -> executeJdbcUpdate(insertSql, insertParams));
                             } else {
-                                executor.client().sql(insertSql).params(insertParams).update();
+                                executeJdbcUpdate(insertSql, insertParams);
                             }
                         }
                     });
@@ -223,9 +223,9 @@ public class OrmManager implements OrmOperations {
                                         : EntityPersister.insertValues(entity, metadata);
                                 if (ormLogger.isDebugEnabled()) {
                                     ormLogger.logAndExecute(SqlConstants.OP_INSERT, insertSql, insertParams,
-                                            () -> executor.client().sql(insertSql).params(insertParams).update());
+                                            () -> executeJdbcUpdate(insertSql, insertParams));
                                 } else {
-                                    executor.client().sql(insertSql).params(insertParams).update();
+                                    executeJdbcUpdate(insertSql, insertParams);
                                 }
                             }
                         } catch (Throwable t) {
@@ -244,9 +244,9 @@ public class OrmManager implements OrmOperations {
                                         : EntityPersister.updateValues(entity, metadata, capturedId);
                                 if (ormLogger.isDebugEnabled()) {
                                     ormLogger.logAndExecute(SqlConstants.OP_UPDATE, updateSql, updateParams,
-                                            () -> executor.client().sql(updateSql).params(updateParams).update());
+                                            () -> executeJdbcUpdate(updateSql, updateParams));
                                 } else {
-                                    executor.client().sql(updateSql).params(updateParams).update();
+                                    executeJdbcUpdate(updateSql, updateParams);
                                 }
                             }
                         }
@@ -270,9 +270,9 @@ public class OrmManager implements OrmOperations {
                             : EntityPersister.insertValues(entity, metadata);
                     if (ormLogger.isDebugEnabled()) {
                         ormLogger.logAndExecute(SqlConstants.OP_INSERT, sql, params,
-                                () -> executor.client().sql(sql).params(params).update());
+                                () -> executeJdbcUpdate(sql, params));
                     } else {
-                        executor.client().sql(sql).params(params).update();
+                        executeJdbcUpdate(sql, params);
                     }
                 }
             });
@@ -324,9 +324,9 @@ public class OrmManager implements OrmOperations {
             int rows = execWrite(() -> {
                 if (ormLogger.isDebugEnabled()) {
                     return ormLogger.logAndExecute(SqlConstants.OP_UPDATE, sql, params,
-                            () -> executor.client().sql(sql).params(params).update());
+                            () -> executeJdbcUpdate(sql, params));
                 }
-                return executor.client().sql(sql).params(params).update();
+                return executeJdbcUpdate(sql, params);
             });
 
             assertOptimisticLock(metadata, entity, id, rows);
@@ -1081,9 +1081,9 @@ public class OrmManager implements OrmOperations {
         int rows = execWrite(() -> {
             if (ormLogger.isDebugEnabled()) {
                 return ormLogger.logAndExecute(SqlConstants.OP_UPDATE, sql, params,
-                        () -> executor.client().sql(sql).params(params).update());
+                        () -> executeJdbcUpdate(sql, params));
             }
-            return executor.client().sql(sql).params(params).update();
+            return executeJdbcUpdate(sql, params);
         });
 
         assertOptimisticLock(metadata, entity, id, rows);
@@ -1114,6 +1114,32 @@ public class OrmManager implements OrmOperations {
             binder.bindUpdate(spec, entity);
         }
         return spec.update();
+    }
+
+    private int executeJdbcUpdate(String sql, List<?> params) {
+        return bindJdbcParams(executor.client().sql(sql), params).update();
+    }
+
+    private int executeJdbcUpdate(String sql, Object... params) {
+        return bindJdbcParams(executor.client().sql(sql), params).update();
+    }
+
+    private JdbcClient.StatementSpec bindJdbcParams(JdbcClient.StatementSpec spec, List<?> params) {
+        JdbcClient.StatementSpec current = spec;
+        int index = 1;
+        for (Object param : params) {
+            current = GeneratedBinderSupport.bindPositional(current, index++, param);
+        }
+        return current;
+    }
+
+    private JdbcClient.StatementSpec bindJdbcParams(JdbcClient.StatementSpec spec, Object... params) {
+        JdbcClient.StatementSpec current = spec;
+        int index = 1;
+        for (Object param : params) {
+            current = GeneratedBinderSupport.bindPositional(current, index++, param);
+        }
+        return current;
     }
 
     private <T> void assertOptimisticLock(EntityMetadata<T> metadata, T entity, Object id, int rows) {
@@ -1260,7 +1286,7 @@ public class OrmManager implements OrmOperations {
         } else if (metadata.hasDeletedAt()) {
             final Instant now = Instant.now();
             params = List.of(now, id);
-            execution = () -> executor.client().sql(sql).params(now, id).update();
+            execution = () -> executeJdbcUpdate(sql, now, id);
         } else {
             params = List.of(id);
             execution = () -> executor.client().sql(sql).param(id).update();
