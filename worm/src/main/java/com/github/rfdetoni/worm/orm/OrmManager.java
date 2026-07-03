@@ -3,7 +3,6 @@ package com.github.rfdetoni.worm.orm;
 import com.github.rfdetoni.worm.ActiveRecord;
 import com.github.rfdetoni.worm.api.iBaseEntity;
 import com.github.rfdetoni.worm.config.WormProperties;
-import com.github.rfdetoni.worm.config.metrics.LatencyRecorder;
 import com.github.rfdetoni.worm.orm.dialect.SqlDialect;
 import com.github.rfdetoni.worm.orm.exception.OptimisticLockException;
 import com.github.rfdetoni.worm.orm.exception.OrmOperationException;
@@ -63,10 +62,9 @@ public class OrmManager implements OrmOperations {
     private final java.util.concurrent.ConcurrentMap<String, String> pagedSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final boolean parallelMappingEnabled;
     private final int parallelMappingThreshold;
-    private final LatencyRecorder latencyRecorder;
 
     public OrmManager(JdbcClient jdbcClient, WormProperties properties, SqlDialect dialect,
-                      DataSource dataSource, PlatformTransactionManager txManager, LatencyRecorder latencyRecorder) {
+                      DataSource dataSource, PlatformTransactionManager txManager) {
         this.executor = new SqlExecutor(jdbcClient, dataSource);
         // Use the entity's package logger as an external logger
         Logger entityLogger = LoggerFactory.getLogger("app.orm.sql"); // or use the desired package
@@ -99,25 +97,19 @@ public class OrmManager implements OrmOperations {
         if (this.parallelMappingEnabled) {
             log.info("[WORM] Parallel mapping ATIVO — threshold={} rows (ForkJoinPool.commonPool)", this.parallelMappingThreshold);
         }
-        this.latencyRecorder = latencyRecorder;
     }
 
     public OrmManager(JdbcClient jdbcClient, WormProperties properties, SqlDialect dialect) {
-        this(jdbcClient, properties, dialect, null, null, null);
+        this(jdbcClient, properties, dialect, null, null);
     }
 
     public OrmManager(JdbcClient jdbcClient, WormProperties properties, SqlDialect dialect, DataSource dataSource) {
-        this(jdbcClient, properties, dialect, dataSource, null, null);
-    }
-
-    public OrmManager(JdbcClient jdbcClient, WormProperties properties, SqlDialect dialect,
-                      DataSource dataSource, PlatformTransactionManager txManager) {
-        this(jdbcClient, properties, dialect, dataSource, txManager, null);
+        this(jdbcClient, properties, dialect, dataSource, null);
     }
 
     // Backwards-compatible ctor if someone uses it
     public OrmManager(JdbcClient jdbcClient) {
-        this(jdbcClient, null, null, null, null, null);
+        this(jdbcClient, null, null, null, null);
     }
 
     public JdbcClient client() {
@@ -140,7 +132,6 @@ public class OrmManager implements OrmOperations {
             final Object id = readId(entity, metadata);
             final WritePlan insertPlan = metadata.insertWritePlan();
             final WritePlan updatePlan = metadata.updateWritePlan();
-            final boolean fast = FastPathDecisionCache.canUseFastPath(metadata.entityClass(), metadata);
 
             // ── Path UPSERT: 1 único round-trip independente de ser novo ou existente ──
             if (insertStrategy == WormProperties.InsertStrategy.UPSERT && id != null && !metadata.hasVersion()) {
@@ -148,9 +139,7 @@ public class OrmManager implements OrmOperations {
                     if (entity instanceof iBaseEntity base) base.created();
                     validateIdIsPresent(entity, metadata, "save");
                     final String sql = resolveSaveUpsertSql(metadata);
-                    final List<Object> params = fast
-                            ? EntityPersisterFastPath.insertValuesFast(entity, metadata)
-                            : EntityPersister.insertValues(entity, metadata);
+                    final List<Object> params = EntityPersister.insertValues(entity, metadata);
                     if (ormLogger.isDebugEnabled()) {
                         ormLogger.logAndExecute(SqlConstants.OP_INSERT, sql, params,
                                 () -> executeJdbcUpdate(sql, params));
@@ -174,9 +163,7 @@ public class OrmManager implements OrmOperations {
                                 base.updated();
                             }
                             final String updateSql = resolveUpdateSql(metadata);
-                            final List<Object> updateParams = fast
-                                    ? EntityPersisterFastPath.updateValuesFast(entity, metadata, capturedId)
-                                    : EntityPersister.updateValues(entity, metadata, capturedId);
+                            final List<Object> updateParams = EntityPersister.updateValues(entity, metadata, capturedId);
                             if (ormLogger.isDebugEnabled()) {
                                 rows = ormLogger.logAndExecute(SqlConstants.OP_UPDATE, updateSql, updateParams,
                                         () -> executeJdbcUpdate(updateSql, updateParams));
@@ -195,9 +182,7 @@ public class OrmManager implements OrmOperations {
                                 base.created();
                             }
                             final String insertSql = resolveInsertSql(metadata);
-                            final List<Object> insertParams = fast
-                                    ? EntityPersisterFastPath.insertValuesFast(entity, metadata)
-                                    : EntityPersister.insertValues(entity, metadata);
+                            final List<Object> insertParams = EntityPersister.insertValues(entity, metadata);
                             if (ormLogger.isDebugEnabled()) {
                                 ormLogger.logAndExecute(SqlConstants.OP_INSERT, insertSql, insertParams,
                                         () -> executeJdbcUpdate(insertSql, insertParams));
@@ -218,9 +203,7 @@ public class OrmManager implements OrmOperations {
                                     base.created();
                                 }
                                 final String insertSql = resolveInsertSql(metadata);
-                                final List<Object> insertParams = fast
-                                        ? EntityPersisterFastPath.insertValuesFast(entity, metadata)
-                                        : EntityPersister.insertValues(entity, metadata);
+                                final List<Object> insertParams = EntityPersister.insertValues(entity, metadata);
                                 if (ormLogger.isDebugEnabled()) {
                                     ormLogger.logAndExecute(SqlConstants.OP_INSERT, insertSql, insertParams,
                                             () -> executeJdbcUpdate(insertSql, insertParams));
@@ -239,9 +222,7 @@ public class OrmManager implements OrmOperations {
                                     base.updated();
                                 }
                                 final String updateSql = resolveUpdateSql(metadata);
-                                final List<Object> updateParams = fast
-                                        ? EntityPersisterFastPath.updateValuesFast(entity, metadata, capturedId)
-                                        : EntityPersister.updateValues(entity, metadata, capturedId);
+                                final List<Object> updateParams = EntityPersister.updateValues(entity, metadata, capturedId);
                                 if (ormLogger.isDebugEnabled()) {
                                     ormLogger.logAndExecute(SqlConstants.OP_UPDATE, updateSql, updateParams,
                                             () -> executeJdbcUpdate(updateSql, updateParams));
@@ -265,9 +246,7 @@ public class OrmManager implements OrmOperations {
                         base.created();
                     }
                     final String sql = resolveInsertSql(metadata);
-                    final List<Object> params = fast
-                            ? EntityPersisterFastPath.insertValuesFast(entity, metadata)
-                            : EntityPersister.insertValues(entity, metadata);
+                    final List<Object> params = EntityPersister.insertValues(entity, metadata);
                     if (ormLogger.isDebugEnabled()) {
                         ormLogger.logAndExecute(SqlConstants.OP_INSERT, sql, params,
                                 () -> executeJdbcUpdate(sql, params));
@@ -550,32 +529,17 @@ public class OrmManager implements OrmOperations {
     public <T, I> Optional<T> findById(Class<T> clazz, I id) {
         final EntityMetadata<T> metadata = getRequiredMetadata(clazz);
         return withModule(metadata, () -> {
-            long startNanos = System.nanoTime();
-            try {
-                boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
+            boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
 
-                if (hasJoins) {
-                    return findById(clazz, id, AliasUtils.defaultMainAlias(metadata.tableName()));
-                }
+            if (hasJoins) {
+                return findById(clazz, id, AliasUtils.defaultMainAlias(metadata.tableName()));
+            }
 
-                final String sql = metadata.idSelectSql();
-                final java.util.function.Supplier<Optional<T>> action = () -> {
-                    if (metadata.hasCollectionJoins()) {
-                        final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
-                        List<T> rows = executor.client().sql(sql).param(id)
-                                .query((rs, _) -> {
-                                    if (planRef[0] == null) {
-                                        // PERF: cache entity row plan per query execution.
-                                        planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
-                                    }
-                                    return EntityMapper.mapRow(rs, metadata, planRef[0]);
-                                })
-                                .list();
-                        List<T> merged = EntityMapper.mergeCollectionJoins(rows, metadata);
-                        return merged.isEmpty() ? Optional.empty() : Optional.of(merged.get(0));
-                    }
+            final String sql = metadata.idSelectSql();
+            final java.util.function.Supplier<Optional<T>> action = () -> {
+                if (metadata.hasCollectionJoins()) {
                     final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
-                    return executor.client().sql(sql).param(id)
+                    List<T> rows = executor.client().sql(sql).param(id)
                             .query((rs, _) -> {
                                 if (planRef[0] == null) {
                                     // PERF: cache entity row plan per query execution.
@@ -583,74 +547,75 @@ public class OrmManager implements OrmOperations {
                                 }
                                 return EntityMapper.mapRow(rs, metadata, planRef[0]);
                             })
-                            .optional();
-                };
+                            .list();
+                    List<T> merged = EntityMapper.mergeCollectionJoins(rows, metadata);
+                    return merged.isEmpty() ? Optional.empty() : Optional.of(merged.get(0));
+                }
+                final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
+                return executor.client().sql(sql).param(id)
+                        .query((rs, _) -> {
+                            if (planRef[0] == null) {
+                                // PERF: cache entity row plan per query execution.
+                                planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
+                            }
+                            return EntityMapper.mapRow(rs, metadata, planRef[0]);
+                        })
+                        .optional();
+            };
 
-                if (!ormLogger.isDebugEnabled()) {
-                    return action.get();
-                }
-                final List<Object> params = List.of(id);
-                return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, params, action);
-            } finally {
-                if (latencyRecorder != null) {
-                    latencyRecorder.record("findById", System.nanoTime() - startNanos);
-                }
+            if (!ormLogger.isDebugEnabled()) {
+                return action.get();
             }
+            final List<Object> params = List.of(id);
+            return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, params, action);
         });
     }
 
     public <T, I> Optional<T> findById(Class<T> clazz, I id, String mainAlias) {
         final EntityMetadata<T> metadata = getRequiredMetadata(clazz);
         return withModule(metadata, () -> {
-            long startNanos = System.nanoTime();
-            try {
-                boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
-                String sql;
-                if (hasJoins) {
-                    sql = metadata.selectSql();
-                    if (mainAlias != null && !mainAlias.isBlank()) {
-                        sql = normalizeMainTableAlias(sql, mainAlias, metadata);
-                    }
-                    sql += SqlConstants.WHERE + (mainAlias != null && !mainAlias.isBlank() ? mainAlias + "." : "") + metadata.idColumnName() + " = ?";
-                } else {
-                    sql = metadata.idSelectSql(mainAlias);
+            boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
+            String sql;
+            if (hasJoins) {
+                sql = metadata.selectSql();
+                if (mainAlias != null && !mainAlias.isBlank()) {
+                    sql = normalizeMainTableAlias(sql, mainAlias, metadata);
                 }
-                final String finalSql = sql;
-                final java.util.function.Supplier<Optional<T>> action = () -> {
-                    if (metadata.hasCollectionJoins()) {
-                        // PERF: drain RS directly — avoids N-entity intermediate list (Gap 2 fix).
-                        List<T> merged = executor.client().sql(finalSql).param(id)
-                                .query(rs -> {
-                                    try {
-                                        return EntityMapper.drainAndMergeCollectionJoins(rs, metadata);
-                                    } catch (java.sql.SQLException e) {
-                                        throw new RuntimeException(e);
-                                    }
-                                });
-                        return merged.isEmpty() ? Optional.empty() : Optional.of(merged.get(0));
-                    }
-                    final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
-                    return executor.client().sql(finalSql).param(id)
-                            .query((rs, _) -> {
-                                if (planRef[0] == null) {
-                                    // PERF: cache entity row plan per query execution.
-                                    planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
-                                }
-                                return EntityMapper.mapRow(rs, metadata, planRef[0]);
-                            })
-                            .optional();
-                };
-
-                if (!ormLogger.isDebugEnabled()) {
-                    return action.get();
-                }
-                final List<Object> params = List.of(id);
-                return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, finalSql, params, action);
-            } finally {
-                if (latencyRecorder != null) {
-                    latencyRecorder.record("findById", System.nanoTime() - startNanos);
-                }
+                sql += SqlConstants.WHERE + (mainAlias != null && !mainAlias.isBlank() ? mainAlias + "." : "") + metadata.idColumnName() + " = ?";
+            } else {
+                sql = metadata.idSelectSql(mainAlias);
             }
+            final String finalSql = sql;
+            final java.util.function.Supplier<Optional<T>> action = () -> {
+                if (metadata.hasCollectionJoins()) {
+                    // PERF: drain RS directly — avoids N-entity intermediate list (Gap 2 fix).
+                    List<T> merged = executor.client().sql(finalSql).param(id)
+                            .query(rs -> {
+                                try {
+                                    return EntityMapper.drainAndMergeCollectionJoins(rs, metadata);
+                                } catch (java.sql.SQLException e) {
+                                    throw new RuntimeException(e);
+                                }
+                            });
+                    return merged.isEmpty() ? Optional.empty() : Optional.of(merged.get(0));
+                }
+                final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
+                return executor.client().sql(finalSql).param(id)
+                        .query((rs, _) -> {
+                            if (planRef[0] == null) {
+                                // PERF: cache entity row plan per query execution.
+                                planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
+                            }
+                            return EntityMapper.mapRow(rs, metadata, planRef[0]);
+                        })
+                        .optional();
+            };
+
+            if (!ormLogger.isDebugEnabled()) {
+                return action.get();
+            }
+            final List<Object> params = List.of(id);
+            return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, finalSql, params, action);
         });
     }
 
@@ -658,34 +623,27 @@ public class OrmManager implements OrmOperations {
     public <T> List<T> findByIdAsList(Class<T> clazz, Object id, String mainAlias) {
         final EntityMetadata<T> metadata = getRequiredMetadata(clazz);
         return withModule(metadata, () -> {
-            long startNanos = System.nanoTime();
-            try {
-                boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
-                if (hasJoins || metadata.hasCollectionJoins()) {
-                    return findById(clazz, id, mainAlias).map(List::of).orElseGet(List::of);
-                }
-
-                final String sql = metadata.idSelectSql(mainAlias);
-                final java.util.function.Supplier<List<T>> action = () -> {
-                    final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
-                    return executor.client().sql(sql).param(id)
-                            .query((rs, _) -> {
-                                if (planRef[0] == null) {
-                                    planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
-                                }
-                                return EntityMapper.mapRow(rs, metadata, planRef[0]);
-                            })
-                            .list();
-                };
-                if (!ormLogger.isDebugEnabled()) {
-                    return action.get();
-                }
-                return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, List.of(id), action);
-            } finally {
-                if (latencyRecorder != null) {
-                    latencyRecorder.record("findById", System.nanoTime() - startNanos);
-                }
+            boolean hasJoins = metadata.joinInfos() != null && metadata.joinInfos().length > 0;
+            if (hasJoins || metadata.hasCollectionJoins()) {
+                return findById(clazz, id, mainAlias).map(List::of).orElseGet(List::of);
             }
+
+            final String sql = metadata.idSelectSql(mainAlias);
+            final java.util.function.Supplier<List<T>> action = () -> {
+                final EntityMapper.EntityRowPlan[] planRef = new EntityMapper.EntityRowPlan[1];
+                return executor.client().sql(sql).param(id)
+                        .query((rs, _) -> {
+                            if (planRef[0] == null) {
+                                planRef[0] = EntityMapper.prepareEntityRowPlan(rs, metadata);
+                            }
+                            return EntityMapper.mapRow(rs, metadata, planRef[0]);
+                        })
+                        .list();
+            };
+            if (!ormLogger.isDebugEnabled()) {
+                return action.get();
+            }
+            return ormLogger.logAndExecute(SqlConstants.OP_SELECT_BY_ID, sql, List.of(id), action);
         });
     }
 
@@ -1072,11 +1030,8 @@ public class OrmManager implements OrmOperations {
         if (entity instanceof iBaseEntity base) {
             base.updated();
         }
-        final boolean fast = FastPathDecisionCache.canUseFastPath(metadata.entityClass(), metadata);
         final String sql = resolveUpdateSql(metadata);
-        final List<Object> params = fast
-                ? EntityPersisterFastPath.updateValuesFast(entity, metadata, id)
-                : EntityPersister.updateValues(entity, metadata, id);
+        final List<Object> params = EntityPersister.updateValues(entity, metadata, id);
 
         int rows = execWrite(() -> {
             if (ormLogger.isDebugEnabled()) {
@@ -1417,7 +1372,7 @@ public class OrmManager implements OrmOperations {
             int[] results = execWrite(() -> {
                 final String sql = resolveInsertSql(meta);
                 final String entityName = meta.entityClass().getSimpleName();
-                final boolean fast = FastPathDecisionCache.canUseFastPath(meta.entityClass(), meta);
+                final boolean fast = meta.idGetter() != null;
                 final List<Object[]> params = new ArrayList<>(entities.size());
                 final Object[] insertBuffer = fast ? null : new Object[meta.insertableColumns().size()];
                 for (T e : entities) {
@@ -1425,7 +1380,7 @@ public class OrmManager implements OrmOperations {
                         base.created();
                     }
                     if (fast) {
-                        params.add(EntityPersisterFastPath.insertValuesArrayFast(e, meta));
+                        params.add(EntityPersister.insertValuesArray(e, meta));
                     } else {
                         EntityPersister.fillInsertBuffer(e, meta, insertBuffer);
                         // PERF: clone once at add time, reusing the working buffer for all entities.
@@ -1458,7 +1413,7 @@ public class OrmManager implements OrmOperations {
             int[] results = execWrite(() -> {
                 final String sql = resolveUpdateSql(meta);
                 final String entityName = meta.entityClass().getSimpleName();
-                final boolean fast = FastPathDecisionCache.canUseFastPath(meta.entityClass(), meta);
+                final boolean fast = meta.idGetter() != null;
                 final List<Object[]> params = new ArrayList<>(entities.size());
                 final List<Object> ids = new ArrayList<>(entities.size());
                 final List<Object> versions = new ArrayList<>(entities.size());
@@ -1469,7 +1424,7 @@ public class OrmManager implements OrmOperations {
                         base.updated();
                     }
                     if (fast) {
-                        params.add(EntityPersisterFastPath.updateValuesArrayFast(e, meta, id));
+                        params.add(EntityPersister.updateValuesArray(e, meta, id));
                     } else {
                         EntityPersister.fillUpdateBuffer(e, meta, id, updateBuffer);
                         // PERF: clone once at add time, reusing the working buffer for all entities.

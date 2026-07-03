@@ -1,8 +1,5 @@
 package com.github.rfdetoni.worm.config;
 
-import com.github.rfdetoni.worm.config.metrics.LatencyRecorder;
-import com.github.rfdetoni.worm.config.metrics.NoOpLatencyRecorder;
-import com.github.rfdetoni.worm.config.metrics.WormLatencyRecorder;
 import com.github.rfdetoni.worm.orm.OrmManager;
 import com.github.rfdetoni.worm.orm.OrmManagerLocator;
 import com.github.rfdetoni.worm.orm.OrmOperations;
@@ -50,14 +47,12 @@ public class OrmAutoConfiguration {
             WormProperties properties,
             SqlDialect sqlDialect,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
-            PlatformTransactionManager transactionManager,
-            @org.springframework.beans.factory.annotation.Autowired(required = false)
-            LatencyRecorder latencyRecorder) {
+            PlatformTransactionManager transactionManager) {
         DataSource dataSource = resolveDataSource(applicationContext, dataSourceProvider);
 
         applyHikariPreparedStatementCacheDefaults(dataSource);
         JdbcClient jdbcClient = JdbcClient.create(dataSource);
-        OrmManager manager = new OrmManager(jdbcClient, properties, sqlDialect, dataSource, transactionManager, latencyRecorder);
+        OrmManager manager = new OrmManager(jdbcClient, properties, sqlDialect, dataSource, transactionManager);
         OrmManagerLocator.setOrmManager(manager);
         return manager;
     }
@@ -108,15 +103,7 @@ public class OrmAutoConfiguration {
         return new WormWarmupExecutor(properties, jdbcTemplate, transactionTemplate);
     }
 
-    @Bean
-    @ConditionalOnMissingBean(LatencyRecorder.class)
-    public LatencyRecorder latencyRecorder(WormProperties properties) {
-        if (properties.isMetricsEnabled()) {
-            return new WormLatencyRecorder();
-        } else {
-            return new NoOpLatencyRecorder();
-        }
-    }
+
 
     private void applyHikariPreparedStatementCacheDefaults(DataSource dataSource) {
         if (!(dataSource instanceof HikariDataSource hikari)) {

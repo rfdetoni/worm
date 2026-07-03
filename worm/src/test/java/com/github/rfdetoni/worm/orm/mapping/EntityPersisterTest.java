@@ -28,7 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
 
-class EntityPersisterFastPathTest {
+class EntityPersisterTest {
 
     static class DialectBinderDialect implements SqlDialect {
         static int binderInvocations;
@@ -129,7 +129,6 @@ class EntityPersisterFastPathTest {
 
     @BeforeEach
     void clearCache() {
-        FastPathDecisionCache.clear();
         DialectBinderDialect.binderInvocations = 0;
     }
 
@@ -145,32 +144,6 @@ class EntityPersisterFastPathTest {
         assertArrayEquals(
                 EntityPersister.updateValues(entity, metadata, entity.id()).toArray(),
                 EntityPersister.updateValuesArray(entity, metadata, entity.id())
-        );
-    }
-
-    @Test
-    void fastPathDelegatesConsistentlyAndCachesDecision() {
-        EntityMetadata<SampleEntity> metadata = EntityMetadata.of(SampleEntity.class);
-        SampleEntity entity = new SampleEntity(11L, "Bob", Status.INACTIVE, 7);
-
-        assertTrue(FastPathDecisionCache.canUseFastPath(SampleEntity.class, metadata));
-        assertEquals(1, FastPathDecisionCache.size());
-
-        assertArrayEquals(
-                EntityPersister.insertValuesArray(entity, metadata),
-                EntityPersisterFastPath.insertValuesArrayFast(entity, metadata)
-        );
-        assertArrayEquals(
-                EntityPersister.updateValuesArray(entity, metadata, entity.id()),
-                EntityPersisterFastPath.updateValuesArrayFast(entity, metadata, entity.id())
-        );
-        assertEquals(
-                EntityPersister.insertValues(entity, metadata),
-                EntityPersisterFastPath.insertValuesFast(entity, metadata)
-        );
-        assertEquals(
-                EntityPersister.updateValues(entity, metadata, entity.id()),
-                EntityPersisterFastPath.updateValuesFast(entity, metadata, entity.id())
         );
     }
 
