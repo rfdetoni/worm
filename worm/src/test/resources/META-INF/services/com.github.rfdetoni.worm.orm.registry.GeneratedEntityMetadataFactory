@@ -1,0 +1,4 @@
+com.github.rfdetoni.worm.orm.registry.GeneratedMetadataLookupTest$AptLookupEntityFactory
+com.github.rfdetoni.worm.orm.registry.GeneratedMetadataLookupTest$AptAuditedEntityFactory
+com.github.rfdetoni.worm.orm.registry.GeneratedMetadataLookupTest$AptUserWithDepartmentFactory
+com.github.rfdetoni.worm.orm.registry.GeneratedMetadataLookupTest$AptBoundEntityFactory

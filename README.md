@@ -236,7 +236,7 @@ Slice<User> page = Finder.all(User.class, new FilterBuilder(), Pageable.of(0, 20
 WORM is auto-configured when on the classpath. If you prefer explicit opt-in, annotate your application:
 
 ```java
-import br.com.liviacare.worm.annotation.EnableWorm;
+import annotation.com.github.rfdetoni.worm.EnableWorm;
 
 @SpringBootApplication
 @EnableWorm

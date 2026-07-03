@@ -2,7 +2,7 @@
 
 ## 1. Runtime DSL design
 
-The DSL runtime is implemented in `br.com.liviacare.worm.dsl` with a minimal expression model:
+The DSL runtime is implemented in `com.github.rfdetoni.worm.dsl` with a minimal expression model:
 
 - `Expression<T>`
 - `Predicate extends Expression<Boolean>`
@@ -74,7 +74,7 @@ Type inference mapping at compile-time:
 
 ## 4. Fluent API
 
-Entry point: `br.com.liviacare.worm.Worm`
+Entry point: `com.github.rfdetoni.worm.Worm`
 
 - entity query:
   - `Worm.selectFrom(u).where(...).orderBy(...).limit(...).fetch()`

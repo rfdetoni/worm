@@ -6,7 +6,7 @@ This module contains the first Annotation Processing Tool (APT) scaffold for WOR
 
 - Scans `@DbTable` entities at compile time.
 - Generates one metadata factory per entity implementing:
-  - `br.com.liviacare.worm.orm.registry.GeneratedEntityMetadataFactory<T>`
+  - `registry.orm.com.github.rfdetoni.worm.GeneratedEntityMetadataFactory<T>`
  - Generates static metamodel companions (`{Entity}_`) with `WormAttribute` descriptors.
 - Generates WORM-native query path companions (`W{Entity}`), for example:
   - `WUser`
