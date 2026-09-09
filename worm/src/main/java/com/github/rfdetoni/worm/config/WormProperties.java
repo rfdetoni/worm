@@ -4,15 +4,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Configuration properties for the WORM ORM framework.
- * Properties can be configured in application.yaml or application.properties.
  *
- * Example:
  * <pre>
  * worm:
  *   batch-size: 1000
  *   insert-strategy: UPSERT
  *   bulk-copy-threshold: 20
  *   bulk-unnest-threshold: 10
+ *   query-plan-cache-max-entries: 4096
  *   async-sql-log-enabled: true
  *   async-sql-log-queue-size: 8192
  *   warmup-enabled: true
@@ -22,12 +21,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "worm")
 public class WormProperties {
 
-    /**
-     * Estratégia para save() de entidades com ID pré-gerado (ex: UUIDv7).
-     * UPSERT     — emite ON CONFLICT DO UPDATE (1 round-trip, recomendado)
-     * TRY_UPDATE — UPDATE first, INSERT on 0 rows (2 round-trips para entidade nova)
-     * INSERT_ONLY — sempre INSERT, lança exceção em duplicata
-     */
     public enum InsertStrategy { UPSERT, TRY_UPDATE, INSERT_ONLY }
 
     /** Batch size for batch insert/update operations. Default: 500 */
@@ -36,68 +29,45 @@ public class WormProperties {
     /** Enable schema validation at startup. Default: false */
     private boolean enableSchemaValidation = false;
 
-    /**
-     * When true, save() attempts UPDATE first (for entities with ID) and falls back to INSERT
-     * if no rows are affected. Only used when insertStrategy=TRY_UPDATE.
-     */
+    /** Used only when insertStrategy=TRY_UPDATE. */
     private boolean saveTryUpdateFirst = true;
 
-    /**
-     * When true, single-row writes are executed inside a TransactionTemplate when available,
-     * reducing auto-commit/fsync overhead on databases like PostgreSQL.
-     */
+    /** Wrap single-row writes in TransactionTemplate when available. */
     private boolean transactionEnabled = true;
 
-    /**
-     * Estratégia de insert para save() com ID pré-gerado. Default: UPSERT (1 round-trip).
-     */
+    /** Strategy for save() with a pre-generated ID. */
     private InsertStrategy insertStrategy = InsertStrategy.UPSERT;
 
-    /** Threshold mínimo para usar COPY FROM STDIN em bulk insert. Default: 20 */
+    /** Minimum threshold for COPY FROM STDIN bulk inserts. */
     private int bulkCopyThreshold = 20;
 
-    /** Threshold mínimo para usar unnest em bulk update/delete. Default: 10 */
+    /** Minimum threshold for unnest-based bulk update/delete. */
     private int bulkUnnestThreshold = 10;
 
-    /** Enable async SQL debug logging dispatch. Default: true */
+    /**
+     * Upper bound for rendered SQL query plans kept in memory.
+     *
+     * <p>Pagination can produce distinct SQL shapes for different offsets. Bounding
+     * the cache avoids unbounded memory retention on workloads that traverse many pages.</p>
+     */
+    private int queryPlanCacheMaxEntries = 4096;
+
+    /** Enable async SQL debug logging dispatch. */
     private boolean asyncSqlLogEnabled = true;
 
-    /** Queue size for async SQL logging dispatcher. Default: 8192 */
+    /** Queue size for async SQL logging dispatcher. */
     private int asyncSqlLogQueueSize = 8192;
 
-    /**
-     * Enable two-phase parallel mapping for bulk queries.
-     *
-     * <p>When {@code true} and a query returns at least {@link #parallelMappingThreshold} rows,
-     * the ORM splits the work into two phases:
-     * <ol>
-     *   <li>Sequential JDBC extraction – reads raw column values while holding the ResultSet cursor.</li>
-     *   <li>Parallel entity construction – applies type converters and invokes constructors/setters
-     *       concurrently via {@code parallelStream()} (backed by {@link java.util.concurrent.ForkJoinPool#commonPool()}).</li>
-     * </ol>
-     *
-     * <p>This is most effective for large result sets (thousands of rows) with heavy type
-     * conversions (UUID, JSON, enums, LocalDateTime, etc.). For small result sets the
-     * overhead of splitting outweighs the gain; use the threshold to tune the cut-off.
-     *
-     * <p>Default: {@code false} – sequential mapping is used.
-     */
+    /** Enable two-phase parallel mapping for bulk queries. */
     private boolean parallelMappingEnabled = false;
 
-    /**
-     * Minimum number of rows required to trigger parallel mapping when
-     * {@link #parallelMappingEnabled} is {@code true}. Default: {@code 1000}.
-     */
+    /** Minimum rows required to trigger parallel mapping. */
     private int parallelMappingThreshold = 1000;
 
-    /**
-     * Enable startup warmup of prepared statements. Default: false
-     */
+    /** Enable startup warmup of prepared statements. */
     private boolean warmupEnabled = false;
 
-    /**
-     * Enable latency metrics recording. Default: false
-     */
+    /** Enable latency metrics recording. */
     private boolean metricsEnabled = false;
 
     public WormProperties() {
@@ -159,6 +129,14 @@ public class WormProperties {
         this.bulkUnnestThreshold = bulkUnnestThreshold;
     }
 
+    public int getQueryPlanCacheMaxEntries() {
+        return queryPlanCacheMaxEntries;
+    }
+
+    public void setQueryPlanCacheMaxEntries(int queryPlanCacheMaxEntries) {
+        this.queryPlanCacheMaxEntries = queryPlanCacheMaxEntries;
+    }
+
     public boolean isAsyncSqlLogEnabled() {
         return asyncSqlLogEnabled;
     }
@@ -217,6 +195,7 @@ public class WormProperties {
                 ", insertStrategy=" + insertStrategy +
                 ", bulkCopyThreshold=" + bulkCopyThreshold +
                 ", bulkUnnestThreshold=" + bulkUnnestThreshold +
+                ", queryPlanCacheMaxEntries=" + queryPlanCacheMaxEntries +
                 ", asyncSqlLogEnabled=" + asyncSqlLogEnabled +
                 ", asyncSqlLogQueueSize=" + asyncSqlLogQueueSize +
                 ", parallelMappingEnabled=" + parallelMappingEnabled +
