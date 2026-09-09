@@ -10,7 +10,6 @@ import com.github.rfdetoni.worm.orm.converter.ConverterRegistry;
 import com.github.rfdetoni.worm.orm.dialect.PostgresDialect;
 import com.github.rfdetoni.worm.orm.dialect.SqlDialect;
 import com.github.rfdetoni.worm.orm.registry.EntityRegistry;
-import com.github.rfdetoni.worm.orm.sql.QueryPlanCache;
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -56,7 +55,7 @@ public class OrmAutoConfiguration {
             LatencyRecorder latencyRecorder) {
         DataSource dataSource = resolveDataSource(applicationContext, dataSourceProvider);
 
-        QueryPlanCache.configureMaxEntries(properties.getQueryPlanCacheMaxEntries());
+        configureQueryPlanCaches(properties.getQueryPlanCacheMaxEntries());
         applyHikariPreparedStatementCacheDefaults(dataSource);
         JdbcClient jdbcClient = JdbcClient.create(dataSource);
         OrmManager manager = new OrmManager(
@@ -69,6 +68,11 @@ public class OrmAutoConfiguration {
         );
         OrmManagerLocator.setOrmManager(manager);
         return manager;
+    }
+
+    private static void configureQueryPlanCaches(int maxEntries) {
+        com.github.rfdetoni.worm.orm.sql.QueryPlanCache.configureMaxEntries(maxEntries);
+        com.github.rfdetoni.worm.dsl.QueryPlanCache.configureMaxEntries(maxEntries);
     }
 
     private DataSource resolveDataSource(ApplicationContext applicationContext,
