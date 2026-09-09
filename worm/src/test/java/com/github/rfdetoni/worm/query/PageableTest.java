@@ -61,8 +61,23 @@ class PageableTest {
     }
 
     @Test
+    void sort_allowsQualifiedSafeIdentifier() {
+        Pageable.Sort sort = Pageable.Sort.asc("report.created_at");
+        assertEquals("report.created_at", sort.property());
+    }
+
+    @Test
+    void sort_rejectsSqlExpressions() {
+        assertThrows(IllegalArgumentException.class,
+                () -> Pageable.Sort.asc("id DESC, (SELECT pg_sleep(1))"));
+        assertThrows(IllegalArgumentException.class,
+                () -> Pageable.Sort.asc("lower(name)"));
+        assertThrows(IllegalArgumentException.class,
+                () -> Pageable.Sort.asc("id;delete_from_users"));
+    }
+
+    @Test
     void canonicalConstructor_requiresNonNullSort() {
         assertThrows(NullPointerException.class, () -> new Pageable(0, 10, null));
     }
 }
-
