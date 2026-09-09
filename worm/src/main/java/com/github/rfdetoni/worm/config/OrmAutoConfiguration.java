@@ -10,6 +10,7 @@ import com.github.rfdetoni.worm.orm.converter.ConverterRegistry;
 import com.github.rfdetoni.worm.orm.dialect.PostgresDialect;
 import com.github.rfdetoni.worm.orm.dialect.SqlDialect;
 import com.github.rfdetoni.worm.orm.registry.EntityRegistry;
+import com.github.rfdetoni.worm.orm.sql.QueryPlanCache;
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -33,13 +34,13 @@ public class OrmAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(SqlDialect.class)
     public SqlDialect sqlDialect() {
-        SqlDialect d = new PostgresDialect();
-        // ensure EntityRegistry has a dialect as early as possible to avoid metadata being built without dialect
+        SqlDialect dialect = new PostgresDialect();
         try {
-            EntityRegistry.setSqlDialect(d);
+            EntityRegistry.setSqlDialect(dialect);
         } catch (Throwable ignored) {
+            // Best effort: metadata can be initialized later by the ORM manager.
         }
-        return d;
+        return dialect;
     }
 
     @Bean
@@ -55,34 +56,39 @@ public class OrmAutoConfiguration {
             LatencyRecorder latencyRecorder) {
         DataSource dataSource = resolveDataSource(applicationContext, dataSourceProvider);
 
+        QueryPlanCache.configureMaxEntries(properties.getQueryPlanCacheMaxEntries());
         applyHikariPreparedStatementCacheDefaults(dataSource);
         JdbcClient jdbcClient = JdbcClient.create(dataSource);
-        OrmManager manager = new OrmManager(jdbcClient, properties, sqlDialect, dataSource, transactionManager, latencyRecorder);
+        OrmManager manager = new OrmManager(
+                jdbcClient,
+                properties,
+                sqlDialect,
+                dataSource,
+                transactionManager,
+                latencyRecorder
+        );
         OrmManagerLocator.setOrmManager(manager);
         return manager;
     }
 
-    /**
-     * Resolve a single DataSource to be used by WORM. Preference order:
-     * 1) bean named 'tenantRoutingDataSource'
-     * 2) the single DataSource in the context
-     * 3) ObjectProvider.getIfAvailable() (returns primary if defined)
-     * Throws an informative IllegalStateException when ambiguous or missing.
-     */
-    private DataSource resolveDataSource(ApplicationContext applicationContext, ObjectProvider<DataSource> dataSourceProvider) {
+    private DataSource resolveDataSource(ApplicationContext applicationContext,
+                                         ObjectProvider<DataSource> dataSourceProvider) {
         DataSource dataSource;
         if (applicationContext.containsBean("tenantRoutingDataSource")) {
             dataSource = applicationContext.getBean("tenantRoutingDataSource", DataSource.class);
         } else {
-            var dss = applicationContext.getBeansOfType(DataSource.class);
-            if (dss.size() == 1) {
-                dataSource = dss.values().iterator().next();
+            var dataSources = applicationContext.getBeansOfType(DataSource.class);
+            if (dataSources.size() == 1) {
+                dataSource = dataSources.values().iterator().next();
             } else {
                 dataSource = dataSourceProvider.getIfAvailable();
                 if (dataSource == null) {
                     throw new IllegalStateException(
                             "[WORM(Weightless ORM)] Ambiguous DataSource beans found. " +
-                                    "When multiple DataSource beans exist, expose a single routing DataSource named 'tenantRoutingDataSource' or mark exactly one DataSource as @Primary, or define your own OrmOperations bean.");
+                                    "When multiple DataSource beans exist, expose a single routing DataSource " +
+                                    "named 'tenantRoutingDataSource' or mark exactly one DataSource as @Primary, " +
+                                    "or define your own OrmOperations bean."
+                    );
                 }
             }
         }
@@ -92,9 +98,10 @@ public class OrmAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(JdbcTemplate.class)
-    public JdbcTemplate jdbcTemplate(ApplicationContext applicationContext, ObjectProvider<DataSource> dataSourceProvider) {
-        DataSource ds = resolveDataSource(applicationContext, dataSourceProvider);
-        return new JdbcTemplate(ds);
+    public JdbcTemplate jdbcTemplate(ApplicationContext applicationContext,
+                                     ObjectProvider<DataSource> dataSourceProvider) {
+        DataSource dataSource = resolveDataSource(applicationContext, dataSourceProvider);
+        return new JdbcTemplate(dataSource);
     }
 
     @Bean
@@ -104,7 +111,9 @@ public class OrmAutoConfiguration {
     }
 
     @Bean
-    public WormWarmupExecutor wormWarmupExecutor(WormProperties properties, JdbcTemplate jdbcTemplate, TransactionTemplate transactionTemplate) {
+    public WormWarmupExecutor wormWarmupExecutor(WormProperties properties,
+                                                 JdbcTemplate jdbcTemplate,
+                                                 TransactionTemplate transactionTemplate) {
         return new WormWarmupExecutor(properties, jdbcTemplate, transactionTemplate);
     }
 
@@ -113,22 +122,17 @@ public class OrmAutoConfiguration {
     public LatencyRecorder latencyRecorder(WormProperties properties) {
         if (properties.isMetricsEnabled()) {
             return new WormLatencyRecorder();
-        } else {
-            return new NoOpLatencyRecorder();
         }
+        return new NoOpLatencyRecorder();
     }
 
     private void applyHikariPreparedStatementCacheDefaults(DataSource dataSource) {
         if (!(dataSource instanceof HikariDataSource hikari)) {
             return;
         }
-        // PERF: set driver-level statement cache defaults once to reduce parse/plan overhead.
         setIfAbsent(hikari, "cachePrepStmts", "true");
-        // PERF: keep cache large enough to cover common ORM CRUD templates.
         setIfAbsent(hikari, "prepStmtCacheSize", "250");
-        // PERF: allow long generated SQL statements to stay cacheable.
         setIfAbsent(hikari, "prepStmtCacheSqlLimit", "2048");
-        // PERF: enable server-side prepared statements on drivers that support it.
         setIfAbsent(hikari, "useServerPrepStmts", "true");
     }
 
@@ -138,24 +142,19 @@ public class OrmAutoConfiguration {
         }
         try {
             hikari.addDataSourceProperty(key, value);
-        } catch (IllegalStateException ex) {
-            // Hikari seals its configuration once the pool is started. If we reach here,
-            // it means the DataSource was already initialized elsewhere. Best effort:
-            // don't fail application startup for a non-critical performance tweak.
-            // The driver/property may already be set, or cannot be changed at runtime.
-            // Ignore the exception and proceed.
+        } catch (IllegalStateException ignored) {
+            // Hikari seals configuration after pool startup. These are best-effort defaults.
         }
     }
 
     @EventListener(ApplicationReadyEvent.class)
-    public void onApplicationReady(ApplicationReadyEvent ev) {
-        ApplicationContext ctx = ev.getApplicationContext();
-        // Dialect has been set at bean creation time (sqlDialect()). Now wire ConverterRegistry if present.
+    public void onApplicationReady(ApplicationReadyEvent event) {
+        ApplicationContext context = event.getApplicationContext();
         try {
-            ConverterRegistry conv = ctx.getBean(ConverterRegistry.class);
-            EntityRegistry.setConverterRegistry(conv);
+            ConverterRegistry converterRegistry = context.getBean(ConverterRegistry.class);
+            EntityRegistry.setConverterRegistry(converterRegistry);
         } catch (Exception ignored) {
-            // no-op if ConverterRegistry not present
+            // ConverterRegistry is optional.
         }
     }
 }
