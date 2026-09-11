@@ -1,0 +1,56 @@
+name: Release WORM 1.0.8
+
+on:
+  push:
+    branches: [release/worm-1.0.8]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 25 and GitHub Packages
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Verify release source
+        run: ./mvnw -B --no-transfer-progress verify
+
+      - name: Create immutable v1.0.8 tag on validated master commit
+        run: |
+          set -euo pipefail
+          git fetch origin master --tags
+          TARGET=3670a750227507ee3a07f8d3e1ce9aa9f56fd9d1
+          test "$(git rev-parse origin/master)" = "$TARGET"
+          if git rev-parse refs/tags/v1.0.8 >/dev/null 2>&1; then
+            test "$(git rev-list -n1 v1.0.8)" = "$TARGET"
+          else
+            git tag -a v1.0.8 "$TARGET" -m "WORM 1.0.8"
+            git push origin refs/tags/v1.0.8
+          fi
+
+      - name: Publish Maven 1.0.8
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./mvnw -B --no-transfer-progress versions:set \
+            -DnewVersion=1.0.8 \
+            -DprocessAllModules=true \
+            -DgenerateBackupPoms=false
+          ./mvnw -B --no-transfer-progress deploy -DskipTests
