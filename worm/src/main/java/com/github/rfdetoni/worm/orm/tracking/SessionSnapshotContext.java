@@ -7,13 +7,15 @@ import java.util.function.Supplier;
 /**
  * Session-scoped snapshot container designed for virtual-thread execution.
  *
- * <p>When running inside a scoped session, snapshots are isolated to that scope.
- * Outside an explicit scope, a per-thread map is used as a compatibility fallback.
+ * <p>Scoped values are the primary storage mechanism. A ThreadLocal fallback is retained only
+ * for backwards compatibility with callers that operate outside an explicit WORM scope; it is
+ * created lazily and removed as soon as it becomes empty to avoid retaining entity graphs on
+ * pooled platform threads.</p>
  */
 public final class SessionSnapshotContext {
 
     private static final ScopedValue<Map<Object, EntitySnapshot>> SCOPED = ScopedValue.newInstance();
-    private static final ThreadLocal<Map<Object, EntitySnapshot>> FALLBACK = ThreadLocal.withInitial(IdentityHashMap::new);
+    private static final ThreadLocal<Map<Object, EntitySnapshot>> FALLBACK = new ThreadLocal<>();
 
     private SessionSnapshotContext() {
     }
@@ -31,26 +33,49 @@ public final class SessionSnapshotContext {
     }
 
     public static EntitySnapshot get(Object entity) {
-        return currentMap().get(entity);
+        Map<Object, EntitySnapshot> snapshots = currentMap(false);
+        return snapshots == null ? null : snapshots.get(entity);
     }
 
     public static void put(Object entity, EntitySnapshot snapshot) {
-        currentMap().put(entity, snapshot);
+        currentMap(true).put(entity, snapshot);
     }
 
     public static void putAll(Map<Object, EntitySnapshot> snapshots) {
         if (snapshots == null || snapshots.isEmpty()) {
             return;
         }
-        currentMap().putAll(snapshots);
+        currentMap(true).putAll(snapshots);
     }
 
     public static void remove(Object entity) {
-        currentMap().remove(entity);
+        Map<Object, EntitySnapshot> snapshots = currentMap(false);
+        if (snapshots == null) {
+            return;
+        }
+        snapshots.remove(entity);
+        if (!SCOPED.isBound() && snapshots.isEmpty()) {
+            FALLBACK.remove();
+        }
     }
 
-    private static Map<Object, EntitySnapshot> currentMap() {
-        return SCOPED.isBound() ? SCOPED.get() : FALLBACK.get();
+    /**
+     * Clears only the compatibility fallback for the current thread.
+     * Scoped snapshots are owned by their ScopedValue scope and require no manual cleanup.
+     */
+    public static void clearFallback() {
+        FALLBACK.remove();
+    }
+
+    private static Map<Object, EntitySnapshot> currentMap(boolean create) {
+        if (SCOPED.isBound()) {
+            return SCOPED.get();
+        }
+        Map<Object, EntitySnapshot> snapshots = FALLBACK.get();
+        if (snapshots == null && create) {
+            snapshots = new IdentityHashMap<>();
+            FALLBACK.set(snapshots);
+        }
+        return snapshots;
     }
 }
-

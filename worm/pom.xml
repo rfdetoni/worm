@@ -14,8 +14,8 @@
     <artifactId>worm</artifactId>
     <packaging>jar</packaging>
     <name>WORM ORM</name>
-    <description>A lightweight, zero-dependency ORM for Java with Spring Boot support</description>
-    <url>https://github.com/liviacare/worm</url>
+    <description>A lightweight JDBC ORM for Java with first-class Spring Boot integration and no JPA/Hibernate dependency</description>
+    <url>https://github.com/rfdetoni/worm</url>
 
     <dependencies>
         <dependency>
@@ -23,10 +23,16 @@
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
 
-        <!-- Add Spring Web MVC dependency so web-related types are available when used -->
+        <!-- Web integration is optional for consumers that only use the ORM core. -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-webmvc</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
         </dependency>
 
         <dependency>
@@ -57,15 +63,17 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <scope>compile</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jsr310</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -88,19 +96,6 @@
                 <configuration>
                     <source>25</source>
                     <target>25</target>
-                </configuration>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <version>3.3.0</version>
-                <configuration>
-                    <archive>
-                        <manifest>
-                            <addClasspath>true</addClasspath>
-                            <mainClass>com.github.rfdetoni.worm.OrmManager</mainClass>
-                        </manifest>
-                    </archive>
                 </configuration>
             </plugin>
             <plugin>
