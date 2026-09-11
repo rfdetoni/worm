@@ -53,14 +53,13 @@ public class OrmManager implements OrmOperations {
     private final WormProperties.InsertStrategy insertStrategy;
     private final TransactionTemplate txTemplate;
     private final BulkWriter bulkWriter;
-    private final java.util.concurrent.ConcurrentMap<String, String> partialUpdateSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final BoundedConcurrentCache<String, String> partialUpdateSqlCache = new BoundedConcurrentCache<>(4096);
     private final java.util.concurrent.ConcurrentMap<Class<?>, String> insertSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentMap<Class<?>, String> updateSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentMap<Class<?>, String> deleteSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentMap<Class<?>, String> softDeleteSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentMap<Class<?>, String> saveUpsertSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentMap<Class<?>, String> batchUpsertSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.concurrent.ConcurrentMap<String, String> pagedSqlCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final boolean parallelMappingEnabled;
     private final int parallelMappingThreshold;
     private final LatencyRecorder latencyRecorder;
@@ -1702,7 +1701,7 @@ public class OrmManager implements OrmOperations {
 
     @Override
     public <T> List<T> executeRawPaged(String baseSql, Class<T> resultClass, int limit, long offset, Object... params) {
-        String paginatedSql = pagedSqlCache.computeIfAbsent(baseSql, ignored -> baseSql + " LIMIT ? OFFSET ?");
+        String paginatedSql = baseSql + " LIMIT ? OFFSET ?";
         Object[] input = params == null ? new Object[0] : params;
         Object[] pagedParams = Arrays.copyOf(input, input.length + 2);
         pagedParams[input.length] = limit;
