@@ -3,7 +3,7 @@
 [![Java Version](https://img.shields.io/badge/java-25+-blue)]()
 [![License](https://img.shields.io/badge/license-MIT-green)]()
 
-**WORM** (Write-Optimize Relational Mapper) is a lightweight, zero-dependency ORM framework for Java with Spring Boot support. It's designed to be **fast, flexible, and JPA/Hibernate-free**.
+**WORM** (Weightless Object-Relational Mapper) is a lightweight, zero-dependency ORM framework for Java with Spring Boot support. It's designed to be **fast, flexible, and JPA/Hibernate-free**.
 
 ## Table of Contents
 
