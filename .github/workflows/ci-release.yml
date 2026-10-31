@@ -3,14 +3,14 @@ name: CI and Maven Release
 on:
   pull_request:
     branches: [master]
+    paths-ignore: ['**/*.md', 'docs/**']
   push:
-    branches: [master]
     tags:
       - 'v*'
   workflow_dispatch:
 
 concurrency:
-  group: worm-${{ github.workflow }}-${{ github.ref }}
+  group: worm-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
